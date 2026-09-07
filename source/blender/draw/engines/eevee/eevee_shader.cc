@@ -118,7 +118,9 @@ ShaderGroups ShaderModule::static_shaders_load(const ShaderGroups request_bits,
                                        DEFERRED_LIGHT_DOUBLE,
                                        DEFERRED_COMBINE,
                                        DEFERRED_AOV_CLEAR,
-                                       DEFERRED_TILE_CLASSIFY};
+                                       DEFERRED_TILE_CLASSIFY,
+                                       SHADOW_DENOISE_TEMPORAL,
+                                       SHADOW_DENOISE_BILATERAL};
     request(DEFERRED_LIGHTING_SHADERS, AS_SPAN(shader_list));
   }
   {
@@ -498,6 +500,10 @@ const char *ShaderModule::static_shader_create_info_name_get(eShaderType shader_
       return "eevee_shadow_tilemap_bounds_init";
     case SHADOW_DEBUG:
       return "eevee_shadow_debug";
+    case SHADOW_DENOISE_BILATERAL:
+      return "eevee_shadow_denoise_bilateral";
+    case SHADOW_DENOISE_TEMPORAL:
+      return "eevee_shadow_denoise_temporal";
     case SHADOW_PAGE_ALLOCATE:
       return "eevee_shadow_page_allocate";
     case SHADOW_PAGE_CLEAR:

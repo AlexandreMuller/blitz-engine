@@ -467,6 +467,7 @@ set(GLSL_SRC
   engines/eevee/shaders/eevee_reverse_z_lib.bsl.hh
   engines/eevee/shaders/eevee_sampling_lib.bsl.hh
   engines/eevee/shaders/eevee_shadow.bsl.hh
+  engines/eevee/shaders/eevee_shadow_denoise.bsl.hh
   engines/eevee/shaders/eevee_shadow_page_allocate.bsl.hh
   engines/eevee/shaders/eevee_shadow_page_clear.bsl.hh
   engines/eevee/shaders/eevee_shadow_page_defrag.bsl.hh

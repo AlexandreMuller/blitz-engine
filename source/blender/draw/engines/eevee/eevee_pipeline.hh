@@ -373,6 +373,20 @@ class DeferredLayer : DeferredLayerBase {
   /* Combine direct and indirect light contributions and apply BSDF color. */
   PassSimple combine_ps_ = {"Combine"};
 
+  /* UPBGE: Shadow denoising passes. Temporal accumulation of the direct (shadowed) radiance,
+   * independent from the TAA/film accumulation, followed by a final separated bilateral filter. */
+  PassSimple shadow_denoise_temporal_ps_ = {"ShadowDenoiseTemporal"};
+  PassSimple shadow_denoise_bilateral_ps_ = {"ShadowDenoiseBilateral"};
+  /* Persistent ping-pong history textures (one array layer per closure bin).
+   * RGB = accumulated direct light, A = view depth (for disocclusion detection). */
+  Texture shadow_history_txs_[2] = {Texture("shadow_history_a"), Texture("shadow_history_b")};
+  /* Index of the history texture to read (reproject from) this frame. */
+  int shadow_history_index_ = 0;
+  /* True if the read history contains data from the previous frame. */
+  bool shadow_history_valid_ = false;
+  /* Fullscreen dispatch size for the denoise passes. Updated at render time. */
+  int3 shadow_denoise_dispatch_size_ = int3(1);
+
   /**
    * Accumulation textures for all stages of lighting evaluation (Light, SSR, SSSS, SSGI ...).
    * These are split and separate from the main radiance buffer in order to accumulate light for
@@ -401,6 +415,8 @@ class DeferredLayer : DeferredLayerBase {
   RayTraceResult indirect_result_;
 
   bool use_split_radiance_ = true;
+  /* UPBGE: Filter and temporally accumulate the direct radiance to remove shadow noise. */
+  bool use_shadow_denoise_ = false;
   /* Output radiance from the combine shader instead of copy. Allow passing unclamped result. */
   bool use_feedback_output_ = false;
   bool use_raytracing_ = false;

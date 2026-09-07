@@ -13,6 +13,8 @@
 #include "BLI_bounds.hh"
 #include "GPU_capabilities.hh"
 
+#include "DNA_scene_types.h"
+
 #include "eevee_instance.hh"
 #include "eevee_pipeline.hh"
 #include "eevee_shadow.hh"
@@ -835,6 +837,13 @@ void DeferredLayer::end_sync(bool is_first_pass,
   use_split_radiance_ = use_raytracing_ || use_clamp_direct_ || use_clamp_indirect_ ||
                         use_indirect_scale || use_direct_scale;
 
+  /* UPBGE: Shadow denoising is only available when the SPFD soft shadow path is disabled. */
+  {
+    const SceneEEVEE &scene_eevee = inst_.scene->eevee;
+    use_shadow_denoise_ = (scene_eevee.shadow_use_denoise != 0) &&
+                          (scene_eevee.shadow_use_pcf == 0) && !is_probe_;
+  }
+
   /* The first pass will never have any surfaces behind it. Nothing is refracted except the
    * environment. So in this case, disable tracing and fallback to probe. */
   use_screen_transmission_ = use_raytracing_ &&
@@ -995,6 +1004,7 @@ void DeferredLayer::end_sync(bool is_first_pass,
                                (rbuf_data.specular_light_id != -1) ||
                                    (rbuf_data.specular_color_id != -1));
       pass.specialize_constant(sh, "use_split_radiance", use_split_radiance_);
+      pass.specialize_constant(sh, "use_shadow_denoise", use_shadow_denoise_);
       pass.specialize_constant(
           sh, "use_radiance_feedback", use_feedback_output_ && use_clamp_direct_);
       pass.specialize_constant(sh, "render_pass_normal_enabled", rbuf_data.normal_id != -1);
@@ -1034,6 +1044,55 @@ void DeferredLayer::end_sync(bool is_first_pass,
       pass.bind_resources(inst_.hiz_buffer.front);
       pass.barrier(GPU_BARRIER_TEXTURE_FETCH | GPU_BARRIER_SHADER_IMAGE_ACCESS);
       pass.draw_procedural(GPU_PRIM_TRIS, 1, 3);
+    }
+    /* UPBGE: Shadow denoising passes. Run between the light evaluation and the combine pass.
+     * The temporal pass reprojects and accumulates the direct radiance into a persistent
+     * history (independent from TAA), the bilateral pass filters the accumulated signal and
+     * writes it back into the direct radiance buffers read by the combine pass. */
+    if (use_shadow_denoise_) {
+      RenderBuffers &rbuffers = inst_.render_buffers;
+      VelocityModule &velocity = inst_.velocity;
+      const int closure_count = min_ii(closure_count_, 3);
+      /* For viewport, only previous motion is supported.
+       * Still bind previous step to avoid undefined behavior. */
+      eVelocityStep step_next = inst_.is_viewport() ? STEP_PREVIOUS : STEP_NEXT;
+      {
+        PassSimple &pass = shadow_denoise_temporal_ps_;
+        pass.init();
+        gpu::Shader *sh = inst_.shaders.static_shader_get(SHADOW_DENOISE_TEMPORAL);
+        pass.specialize_constant(sh, "closure_count", closure_count);
+        pass.shader_set(sh);
+        pass.bind_texture("direct_radiance_1_tx", &direct_radiance_txs_[0]);
+        pass.bind_texture("direct_radiance_2_tx", &direct_radiance_txs_[1]);
+        pass.bind_texture("direct_radiance_3_tx", &direct_radiance_txs_[2]);
+        pass.bind_texture("depth_tx", &rbuffers.depth_tx);
+        pass.bind_texture("vector_tx", &rbuffers.vector_tx);
+        pass.bind_texture("history_tx", &shadow_history_txs_[shadow_history_index_]);
+        pass.bind_image("out_history_img", &shadow_history_txs_[shadow_history_index_ ^ 1]);
+        pass.bind_ubo("camera_prev", &(*velocity.camera_steps[STEP_PREVIOUS]));
+        pass.bind_ubo("camera_curr", &(*velocity.camera_steps[STEP_CURRENT]));
+        pass.bind_ubo("camera_next", &(*velocity.camera_steps[step_next]));
+        pass.bind_resources(inst_.gbuffer);
+        /* Make the light evaluation image writes visible to the texture fetches. */
+        pass.barrier(GPU_BARRIER_TEXTURE_FETCH);
+        pass.dispatch(&shadow_denoise_dispatch_size_);
+        pass.barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS | GPU_BARRIER_TEXTURE_FETCH);
+      }
+      {
+        PassSimple &pass = shadow_denoise_bilateral_ps_;
+        pass.init();
+        gpu::Shader *sh = inst_.shaders.static_shader_get(SHADOW_DENOISE_BILATERAL);
+        pass.specialize_constant(sh, "closure_count", closure_count);
+        pass.shader_set(sh);
+        pass.bind_texture("history_tx", &shadow_history_txs_[shadow_history_index_ ^ 1]);
+        pass.bind_texture("depth_tx", &rbuffers.depth_tx);
+        pass.bind_image("direct_radiance_1_img", &direct_radiance_txs_[0]);
+        pass.bind_image("direct_radiance_2_img", &direct_radiance_txs_[1]);
+        pass.bind_image("direct_radiance_3_img", &direct_radiance_txs_[2]);
+        pass.bind_resources(inst_.gbuffer);
+        pass.dispatch(&shadow_denoise_dispatch_size_);
+        pass.barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS | GPU_BARRIER_TEXTURE_FETCH);
+      }
     }
   }
 }
@@ -1139,6 +1198,34 @@ gpu::Texture *DeferredLayer::render(View &render_view,
 
   inst_.subsurface.render(
       direct_radiance_txs_[0], indirect_result_.closures[0], closure_bits_, render_view);
+
+  /* UPBGE: Shadow denoising. Temporally accumulate then filter the direct radiance before the
+   * combine pass consumes it. */
+  if (use_shadow_denoise_) {
+    constexpr eGPUTextureUsage history_usage = GPU_TEXTURE_USAGE_SHADER_READ |
+                                               GPU_TEXTURE_USAGE_SHADER_WRITE;
+    bool recreated = false;
+    for (int i = 0; i < 2; i++) {
+      recreated |= shadow_history_txs_[i].ensure_2d_array(
+          gpu::TextureFormat::SFLOAT_16_16_16_16, extent, 3, history_usage);
+    }
+    if (recreated || !shadow_history_valid_) {
+      /* Clear the history read this frame: alpha 0 invalidates all reprojected taps. */
+      shadow_history_txs_[shadow_history_index_].clear(float4(0.0f));
+    }
+
+    /* Must match SHADOW_DENOISE_GROUP_SIZE in eevee_shadow_denoise.bsl.hh. */
+    shadow_denoise_dispatch_size_ = int3(math::divide_ceil(extent, int2(8)), 1);
+    inst_.manager->submit(shadow_denoise_temporal_ps_, render_view);
+    inst_.manager->submit(shadow_denoise_bilateral_ps_, render_view);
+
+    /* Swap the history ping-pong for the next frame. */
+    shadow_history_index_ ^= 1;
+    shadow_history_valid_ = true;
+  }
+  else {
+    shadow_history_valid_ = false;
+  }
 
   radiance_feedback_tx_ = rt_buffer.feedback_ensure(!use_feedback_output_, extent);
 

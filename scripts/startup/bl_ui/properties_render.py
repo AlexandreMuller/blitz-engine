@@ -765,6 +765,12 @@ class RENDER_PT_eevee_sampling_shadows(RenderButtonsPanel, Panel):
         sub2.active = props.shadow_pcf_curve_mode == 'CARDINAL'
         sub2.prop(props, "shadow_pcf_curve_tension", text="Curve Tension")
 
+        #upbge
+        col = layout.column(heading="Denoising", align=True)
+        sub = col.column(align=True)
+        sub.active = not props.shadow_use_pcf
+        sub.prop(props, "shadow_use_denoise", text="Shadow Denoising")
+
 
 class RENDER_PT_eevee_sampling(RenderButtonsPanel, Panel):
     bl_label = "Sampling"

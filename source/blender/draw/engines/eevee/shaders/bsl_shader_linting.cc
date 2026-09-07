@@ -89,6 +89,7 @@
 #include "eevee_reverse_z_lib.bsl.hh"                /* IWYU pragma: export */
 #include "eevee_sampling_lib.bsl.hh"                 /* IWYU pragma: export */
 #include "eevee_shadow.bsl.hh"                       /* IWYU pragma: export */
+#include "eevee_shadow_denoise.bsl.hh"               /* IWYU pragma: export */
 #include "eevee_shadow_page_allocate.bsl.hh"         /* IWYU pragma: export */
 #include "eevee_shadow_page_clear.bsl.hh"            /* IWYU pragma: export */
 #include "eevee_shadow_page_defrag.bsl.hh"           /* IWYU pragma: export */

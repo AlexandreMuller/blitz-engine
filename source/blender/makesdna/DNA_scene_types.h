@@ -2907,7 +2907,8 @@ struct SceneEEVEE {
   float shadow_pcf_grain = 1.0f;
   int shadow_pcf_curve_mode = 1;
   float shadow_pcf_curve_tension = 0.5f;
-  float _pad2[1] = {};
+  /* Shadow denoising options (upbge only). */
+  int shadow_use_denoise = 0;
 
   float clamp_surface_direct = 0;
   float clamp_surface_indirect = 10.0f;

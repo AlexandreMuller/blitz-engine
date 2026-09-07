@@ -7,11 +7,15 @@
 #include "draw_view.bsl.hh"
 #include "eevee_closure.bsl.hh"
 #include "eevee_colorspace_lib.bsl.hh"
+#include "eevee_filter.bsl.hh"
 #include "eevee_gbuffer_read.bsl.hh"
 #include "eevee_hiz.bsl.hh"
 #include "eevee_renderpass.bsl.hh"
 #include "gpu_shader_fullscreen_lib.glsl"
+#include "gpu_shader_math_base_lib.glsl"
+#include "gpu_shader_math_vector_lib.glsl"
 #include "gpu_shader_shared_exponent_lib.glsl"
+#include "gpu_shader_utildefines_lib.glsl"
 
 namespace eevee::deferred {
 
@@ -30,6 +34,8 @@ struct Combine {
   [[specialization_constant(false)]] bool use_albedo_roughness_weighting;
   [[specialization_constant(false)]] bool use_radiance_feedback;
   [[specialization_constant(true)]] bool use_split_radiance;
+  /* UPBGE: Shadow denoising spatial pre-filter. */
+  [[specialization_constant(false)]] bool use_shadow_denoise;
 
   /* Inputs. */
   [[sampler(2)]] usampler2D direct_radiance_1_tx;
@@ -73,6 +79,58 @@ struct Combine {
         return float3(0);
     }
     return float3(0);
+  }
+
+  /**
+   * UPBGE shadow denoising: 3x3 bilateral filter over the packed direct radiance.
+   * Uses a gaussian spatial weight and rejects samples across geometric discontinuities
+   * using the gbuffer surface normal and the reconstructed depth.
+   */
+  float3 load_radiance_direct_denoised([[resource_table]] const gbuffer::Reader &reader,
+                                       [[resource_table]] const HiZ &hiz,
+                                       ViewMatrices view,
+                                       int2 texel,
+                                       uchar bin,
+                                       float3 center_N,
+                                       float3 center_P) const
+  {
+    float2 extent_inv = 1.0f / float2(textureSize(direct_radiance_1_tx, 0).xy);
+    float gauss = filters::gaussian_factor(1.5f, 1.0f);
+
+    float3 radiance_accum = load_radiance_direct(texel, bin);
+    float weight_accum = 1.0f;
+
+    for (int y = -1; y <= 1; y++) {
+      for (int x = -1; x <= 1; x++) {
+        if (x == 0 && y == 0) {
+          continue;
+        }
+        int2 sample_texel = texel + int2(x, y);
+        if (!in_texture_range(sample_texel, direct_radiance_1_tx)) {
+          continue;
+        }
+        ClosureUndetermined sample_cl = reader.read_bin(sample_texel, bin);
+        if (sample_cl.type == CLOSURE_NONE_ID) {
+          continue;
+        }
+        float sample_depth = texelFetch(hiz.hiz_tx, sample_texel, 0).r;
+        if (sample_depth == 1.0f) {
+          /* Background. */
+          continue;
+        }
+        float2 sample_uv = (float2(sample_texel) + 0.5f) * extent_inv;
+        float3 sample_P = view.point_screen_to_world(float3(sample_uv, sample_depth));
+
+        float depth_weight = filters::planar_weight(center_N, center_P, sample_P, 10000.0f);
+        float normal_weight = filters::angle_weight(center_N, sample_cl.N);
+        float spatial_weight = filters::gaussian_weight(gauss, length_squared(float2(x, y)));
+        float weight = depth_weight * normal_weight * spatial_weight;
+
+        radiance_accum += load_radiance_direct(sample_texel, bin) * weight;
+        weight_accum += weight;
+      }
+    }
+    return radiance_accum * safe_rcp(weight_accum);
   }
 };
 
@@ -137,6 +195,17 @@ void combine_frag([[resource_table]] Combine &srt,
 
         uchar layer_index = bin_indices[i];
         float3 closure_direct_light = srt.load_radiance_direct(texel, layer_index);
+        /* NOTE: Do not use [[static_branch]] here. The unroll + static_branch combination is
+         * mishandled by the shader translator. The condition is a specialization constant, so
+         * the GLSL compiler folds it statically anyway. */
+        if (srt.use_shadow_denoise) {
+          /* UPBGE: Spatially filter the (already temporally denoised) direct radiance. */
+          const ViewMatrices view = views.get(0);
+          float center_depth = texelFetch(hiz.hiz_tx, texel, 0).r;
+          float3 center_P = view.point_screen_to_world(float3(v_out.screen_uv, center_depth));
+          closure_direct_light = srt.load_radiance_direct_denoised(
+              reader, hiz, view, texel, layer_index, cl.N, center_P);
+        }
         float3 closure_indirect_light = float3(0.0f);
 
         if (srt.use_split_radiance) {

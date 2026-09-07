@@ -9744,6 +9744,18 @@ static void rna_def_scene_eevee(BlenderRNA *brna)
   RNA_def_property_update(prop, NC_SCENE | ND_RENDER_OPTIONS, nullptr);
   RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
   RNA_def_property_update(prop, NC_SCENE | ND_RENDER_OPTIONS, nullptr);
+
+  /* Shadow denoising options. (upbge) */
+  prop = RNA_def_property(srna, "shadow_use_denoise", PROP_BOOLEAN, PROP_NONE);
+  RNA_def_property_boolean_sdna(prop, nullptr, "shadow_use_denoise", 1);
+  RNA_def_property_ui_text(prop,
+                           "Shadow Denoising",
+                           "Filter shadow sampling noise from direct lighting using a "
+                           "depth/normal aware bilateral filter followed by temporal accumulation "
+                           "with reprojection (independent from TAA). Only available when Soft "
+                           "Shadows (SPFD) is disabled");
+  RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
+  RNA_def_property_update(prop, NC_SCENE | ND_RENDER_OPTIONS, nullptr);
 }
 
 static void rna_def_scene_gpencil(BlenderRNA *brna)
