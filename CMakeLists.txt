@@ -69,7 +69,7 @@ endif()
 # -----------------------------------------------------------------------------
 # Initialize Project
 
-project(Blender)
+project(BlitzEngine)
 
 enable_testing()
 
