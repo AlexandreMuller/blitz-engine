@@ -1193,7 +1193,6 @@ gpu::Texture *DeferredLayer::render(View &render_view,
 
   inst_.subsurface.render(
       direct_radiance_txs_, indirect_result_.closures[0], closure_bits_, render_view);
-<<<<<<< HEAD
 
   /* UPBGE: Shadow denoising. Temporally accumulate then filter the direct radiance before the
    * combine pass consumes it. */
@@ -1222,8 +1221,6 @@ gpu::Texture *DeferredLayer::render(View &render_view,
   else {
     shadow_history_valid_ = false;
   }
-=======
->>>>>>> upstream/master
 
   radiance_feedback_tx_ = rt_buffer.feedback_ensure(!use_feedback_output_, extent);
 

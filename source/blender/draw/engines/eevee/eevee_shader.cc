@@ -113,30 +113,15 @@ ShaderGroups ShaderModule::static_shaders_load(const ShaderGroups request_bits,
   {
     /* These are the slowest shaders by far. Submitting them first make sure they overlap with
      * other shaders compilation. */
-<<<<<<< HEAD
-<<<<<<< HEAD
-    const eShaderType shader_list[] = {DEFERRED_LIGHT_TRIPLE,
-                                       DEFERRED_LIGHT_SINGLE,
-                                       DEFERRED_LIGHT_DOUBLE,
-                                       DEFERRED_COMBINE,
-                                       DEFERRED_AOV_CLEAR,
-                                       DEFERRED_TILE_CLASSIFY,
-                                       SHADOW_DENOISE_TEMPORAL,
-                                       SHADOW_DENOISE_BILATERAL};
-=======
-=======
->>>>>>> upstream/master
     const eShaderType shader_list[] = {
         DEFERRED_LIGHT_TRIPLE,
         DEFERRED_LIGHT_SINGLE,
         DEFERRED_LIGHT_DOUBLE,
         DEFERRED_COMBINE,
         DEFERRED_AOV_CLEAR,
-        GPU_stencil_export_support() ? DEFERRED_TILE_CLASSIFY : DEFERRED_TILE_CLASSIFY_FALLBACK};
-<<<<<<< HEAD
->>>>>>> upstream/master
-=======
->>>>>>> upstream/master
+        GPU_stencil_export_support() ? DEFERRED_TILE_CLASSIFY : DEFERRED_TILE_CLASSIFY_FALLBACK,
+        SHADOW_DENOISE_TEMPORAL,
+        SHADOW_DENOISE_BILATERAL};
     request(DEFERRED_LIGHTING_SHADERS, AS_SPAN(shader_list));
   }
   {

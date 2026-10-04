@@ -654,34 +654,13 @@ float shadow_eval(ShadowRenderData &srd,
   float texel_radius = shadow_texel_radius_at_position(
       srd.uniforms, srd.views, light, is_directional, P);
 
-<<<<<<< HEAD
   /* UPBGE SPFD path: If the global toggle is enabled, use the "Sombra-Penumbra por
    * Fracao de Disco" technique unconditionally (it overrides the per-light jitter toggle).
    * SPFD is a deterministic single-pass technique; it never falls back to the noisy
    * ray-tracing path regardless of the light's jitter setting. */
-  if (bool(uni.uniform_buf.shadow.use_pcf)) {
-    float light_radius_scale = uni.uniform_buf.shadow.pcf_offset_scale;
-    float max_penumbra_scale = uni.uniform_buf.shadow.pcf_grain_scale;
-=======
-  /* UPBGE PCF path: If the global PCF option is enabled and the light doesn't use jitter,
-   * use a stable 3x3 PCF instead of the noisy ray-tracing path.
-   * This gives cleaner shadows with 1 ray / 1 step. If no Taa, slight but nice noise.
-   *
-   * pcf_step and softness are fixed at texel_radius scale so the kernel
-   * always samples neighbouring texels and never reaches far enough to
-   * darken lit areas. User settings only affect pcf_rnd which controls
-   * the sub-texel jitter of P_center via shadow_pcf_offset:
-   *   - grain_scale modulates the amplitude of the center offset.
-   *   - offset_scale modulates the random input to vary the pattern. */
-  bool use_jitter = (light.flags & LIGHT_USE_SHADOW_JITTER) != 0 &&
-                    srd.uniforms.uniform_buf.shadow.use_jitter;
-  if (bool(srd.uniforms.uniform_buf.shadow.use_pcf) && !use_jitter) {
-    float offset_scale = srd.uniforms.uniform_buf.shadow.pcf_offset_scale;
-    float grain_scale = srd.uniforms.uniform_buf.shadow.pcf_grain_scale;
-
-    float softness = texel_radius * 0.5f;
-    float pcf_step = texel_radius;
->>>>>>> upstream/master
+  if (bool(srd.uniforms.uniform_buf.shadow.use_pcf)) {
+    float light_radius_scale = srd.uniforms.uniform_buf.shadow.pcf_offset_scale;
+    float max_penumbra_scale = srd.uniforms.uniform_buf.shadow.pcf_grain_scale;
 
     /* Apply normal bias to avoid self-shadowing. */
     float3 P_biased = P + N_bias * shadow_normal_offset(Ng, L, texel_radius);
@@ -724,7 +703,7 @@ float shadow_eval(ShadowRenderData &srd,
 
     /* Etapa 3: curva de reformato aplicada uma unica vez sobre a fracao agregada. */
     return shadow_pcss_curve_remap(
-        F, int(uni.uniform_buf.shadow.pcf_curve_mode), uni.uniform_buf.shadow.pcf_curve_tension);
+        F, int(srd.uniforms.uniform_buf.shadow.pcf_curve_mode), srd.uniforms.uniform_buf.shadow.pcf_curve_tension);
   }
   /* End of UPBGE SPFD path. */
 
