@@ -579,7 +579,7 @@ static void detect_workarounds()
       }
     }
 
-    /* #107642, #120273 The legacy Intel 7-10th Gen Processsor iGPU driver incorrectly reports that
+    /* #107642, #120273 The legacy Intel 7-10th Gen Processor iGPU driver incorrectly reports that
      * image binding is supported. But when used it results in `GL_INVALID_OPERATION` with
      * `internal format of texture N is not supported`. 101.5972 is the oldest checked driver where
      * it was manually confirmed that this issue is no longer present on newer driver versions. */
@@ -658,6 +658,7 @@ void GLBackend::capabilities_init()
                             epoxy_has_gl_extension("GL_ATI_meminfo");
   GCaps.geometry_shader_support = true;
   GCaps.hdr_viewport_support = false;
+  GCaps.multi_viewport_support = true;
   GCaps.vertex_pipeline_stores_and_atomics_support = true;
 
   GCaps.srgb_write_view_support = true;

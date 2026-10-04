@@ -391,14 +391,14 @@ const GeoOperatorLog &node_group_operator_static_eval_log()
 static void find_verbose_log_contexts(const Main &bmain,
                                       Set<ComputeContextHash> &r_verbose_log_contexts)
 {
-  wmWindowManager *wm = static_cast<wmWindowManager *>(bmain.wm.first);
+  wmWindowManager *wm = bmain.wm.first();
   if (wm == nullptr) {
     return;
   }
   for (const wmWindow &window : wm->windows) {
     const bScreen *screen = BKE_workspace_active_screen_get(window.workspace_hook);
     for (const ScrArea &area : screen->areabase) {
-      const SpaceLink *sl = static_cast<SpaceLink *>(area.spacedata.first);
+      const SpaceLink *sl = area.spacedata.first_as<SpaceLink>();
       if (sl->spacetype == SPACE_NODE) {
         const SpaceNode &snode = *reinterpret_cast<const SpaceNode *>(sl);
         if (snode.edittree == nullptr) {
@@ -540,10 +540,11 @@ static bke::GeometrySet get_original_geometry_eval_copy(Depsgraph &depsgraph,
     case OB_MESH: {
       Mesh *mesh = id_cast<Mesh *>(object.data);
 
-      if (std::shared_ptr<BMEditMesh> &em = mesh->runtime->edit_mesh) {
-        operator_data.active_point_index = BM_mesh_active_vert_index_get(em->bm);
-        operator_data.active_edge_index = BM_mesh_active_edge_index_get(em->bm);
-        operator_data.active_face_index = BM_mesh_active_face_index_get(em->bm, false, true);
+      if (mesh->runtime->edit_mesh) {
+        BMesh *bm = BKE_editmesh_bmesh_get_for_write(mesh);
+        operator_data.active_point_index = BM_mesh_active_vert_index_get(bm);
+        operator_data.active_edge_index = BM_mesh_active_edge_index_get(bm);
+        operator_data.active_face_index = BM_mesh_active_face_index_get(bm, false, true);
         EDBM_mesh_load_ex(DEG_get_bmain(&depsgraph), &object, true);
         EDBM_mesh_free_data(mesh->runtime->edit_mesh.get());
         /* Clear the edit-mesh entirely rather than just freeing its #BMesh. Leaving a #BMEditMesh
@@ -601,6 +602,7 @@ static void store_result_geometry(const bContext &C,
       Curves *new_curves = geometry.get_curves_for_write();
       if (!new_curves) {
         curves.geometry.wrap() = {};
+        DEG_id_tag_update(&curves.id, ID_RECALC_GEOMETRY);
         break;
       }
 
@@ -617,8 +619,9 @@ static void store_result_geometry(const bContext &C,
       PointCloud *new_points =
           geometry.get_component_for_write<bke::PointCloudComponent>().release();
       if (!new_points) {
-        new_points->attribute_storage.wrap() = {};
+        points.attribute_storage.wrap() = {};
         points.totpoint = 0;
+        DEG_id_tag_update(&points.id, ID_RECALC_GEOMETRY);
         break;
       }
 
@@ -665,7 +668,8 @@ static void store_result_geometry(const bContext &C,
         }
         if (object.mode == OB_MODE_EDIT) {
           EDBM_mesh_make_from_mesh(&object, new_mesh, scene.toolsettings->selectmode, true);
-          BKE_editmesh_looptris_and_normals_calc(mesh.runtime->edit_mesh.get());
+          BKE_editmesh_looptris_and_normals_calc(mesh.runtime->edit_mesh.get(),
+                                                 BKE_editmesh_bmesh_get_for_write(&mesh));
           BKE_id_free(nullptr, new_mesh);
           DEG_id_tag_update(&mesh.id, ID_RECALC_GEOMETRY);
         }
@@ -1993,9 +1997,9 @@ static Set<StringRef> get_builtin_menus(const ObjectType object_type, const eObj
 
 static bool menu_operators_poll(const bContext &C, const RegistrationData::TypeTreeItem &node)
 {
-  if (std::ranges::any_of(node.types, [&](wmOperatorType *ot) {
-        return WM_operator_poll(&const_cast<bContext &>(C), ot);
-      }))
+  if (std::ranges::any_of(
+          node.types,
+          [&](wmOperatorType *ot) { return WM_operator_poll(&const_cast<bContext &>(C), ot); }))
   {
     return true;
   }

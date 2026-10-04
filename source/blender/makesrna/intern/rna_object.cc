@@ -219,7 +219,7 @@ const EnumPropertyItem rna_enum_metaelem_type_items[] = {
     {MB_TUBE, "CAPSULE", ICON_META_CAPSULE, "Capsule", ""},
     {MB_PLANE, "PLANE", ICON_META_PLANE, "Plane", ""},
     /* NOTE: typo at original definition! */
-    {MB_ELIPSOID, "ELLIPSOID", ICON_META_ELLIPSOID, "Ellipsoid", ""},
+    {MB_ELLIPSOID, "ELLIPSOID", ICON_META_ELLIPSOID, "Ellipsoid", ""},
     {MB_CUBE, "CUBE", ICON_META_CUBE, "Cube", ""},
     {0, nullptr, 0, nullptr, nullptr},
 };
@@ -502,7 +502,7 @@ static void rna_Object_active_shape_update(Main *bmain, Scene * /*scene*/, Point
 
         DEG_id_tag_update(&mesh->id, 0);
 
-        BKE_editmesh_looptris_and_normals_calc(em);
+        BKE_editmesh_looptris_and_normals_calc(em, BKE_editmesh_bmesh_get_for_write(mesh));
         break;
       }
       case OB_CURVES_LEGACY:
@@ -525,9 +525,12 @@ static void rna_Object_active_shape_update(Main *bmain, Scene * /*scene*/, Point
 
 static void rna_Object_dependency_update(Main *bmain, Scene * /*scene*/, PointerRNA *ptr)
 {
+  Object *ob = id_cast<Object *>(ptr->owner_id);
   DEG_id_tag_update(ptr->owner_id, ID_RECALC_TRANSFORM);
   DEG_relations_tag_update(bmain);
   WM_main_add_notifier(NC_OBJECT | ND_PARENT, ptr->owner_id);
+
+  BKE_collection_object_parented_sort_index_reset(*bmain, *ob);
 }
 
 void rna_Object_data_update(Main *bmain, Scene *scene, PointerRNA *ptr)
@@ -1753,7 +1756,7 @@ static void rna_GameObjectSettings_used_state_get(PointerRNA *ptr, bool *values)
   bController *cont;
 
   memset(values, 0, sizeof(bool) * OB_MAX_STATES);
-  for (cont = (bController *)ob->controllers.first; cont; cont = cont->next) {
+  for (cont = ob->controllers.first(); cont; cont = cont->next) {
     int i;
 
     for (i = 0; i < OB_MAX_STATES; i++) {
@@ -1857,7 +1860,7 @@ static bool rna_GameObjectSettings_components_override_apply(
   if (proxy_src == nullptr && opop->subitem_local_index >= 0) {
     proxy_src = (PythonProxy *)BLI_findlink(&ob_src->components, opop->subitem_local_index);
   }
-  proxy_src = proxy_src ? (PythonProxy *)proxy_src->next : (PythonProxy *)ob_src->components.first;
+  proxy_src = proxy_src ? (PythonProxy *)proxy_src->next : ob_src->components.first();
 
   BLI_assert(proxy_src != nullptr);
 
@@ -1949,9 +1952,12 @@ static void rna_Object_active_constraint_set(PointerRNA *ptr,
   BKE_constraints_active_set(&ob->constraints, static_cast<bConstraint *>(value.data));
 }
 
-static bConstraint *rna_Object_constraints_new(Object *object, Main *bmain, int type)
+static bConstraint *rna_Object_constraints_new(Object *object,
+                                               Main *bmain,
+                                               int type,
+                                               const char *name)
 {
-  bConstraint *new_con = BKE_constraint_add_for_object(object, nullptr, eBConstraint_Types(type));
+  bConstraint *new_con = BKE_constraint_add_for_object(object, name, eBConstraint_Types(type));
 
   ed::object::constraint_tag_update(bmain, object, new_con);
   WM_main_add_notifier(NC_OBJECT | ND_CONSTRAINT | NA_ADDED, object);
@@ -3340,8 +3346,15 @@ static void rna_def_object_constraints(BlenderRNA *brna, PropertyRNA *cprop)
   parm = RNA_def_enum(
       func, "type", rna_enum_constraint_type_items, 1, "", "Constraint type to add");
   RNA_def_parameter_flags(parm, PropertyFlag(0), PARM_REQUIRED);
+  RNA_def_string(func,
+                 "name",
+                 nullptr,
+                 0,
+                 "",
+                 "Name of the new constraint. If empty, the name of the constraint type is used");
   /* return type */
   parm = RNA_def_pointer(func, "constraint", "Constraint", "", "New constraint");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
 
   func = RNA_def_function(srna, "remove", "rna_Object_constraints_remove");
@@ -3378,6 +3391,7 @@ static void rna_def_object_constraints(BlenderRNA *brna, PropertyRNA *cprop)
   RNA_def_parameter_clear_flags(parm, PROP_THICK_WRAP, ParameterFlag(0));
   /* return type */
   parm = RNA_def_pointer(func, "new_constraint", "Constraint", "", "New constraint");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
 }
 
@@ -3577,6 +3591,7 @@ static void rna_def_object_vertex_groups(BlenderRNA *brna, PropertyRNA *cprop)
   RNA_def_function_ui_description(func, "Add vertex group to object");
   RNA_def_string(func, "name", "Group", 0, "", "Vertex group name"); /* optional */
   parm = RNA_def_pointer(func, "group", "VertexGroup", "", "New vertex group");
+  RNA_def_parameter_flags(parm, PROP_NEVER_NULL, ParameterFlag(0));
   RNA_def_function_return(func, parm);
 
   func = RNA_def_function(srna, "remove", "rna_Object_vgroup_remove");
@@ -3811,6 +3826,7 @@ static void rna_def_object_visibility(StructRNA *srna)
   prop = RNA_def_property(srna, "visible_camera", PROP_BOOLEAN, PROP_NONE);
   RNA_def_property_boolean_negative_sdna(prop, nullptr, "visibility_flag", OB_HIDE_CAMERA);
   RNA_def_property_ui_text(prop, "Camera Visibility", "Object visibility to camera rays");
+  RNA_def_property_ui_icon(prop, ICON_INDIRECT_ONLY_OFF, 1);
   RNA_def_property_update(prop, NC_OBJECT | ND_DRAW, "rna_Object_internal_update_draw");
 
   prop = RNA_def_property(srna, "visible_diffuse", PROP_BOOLEAN, PROP_NONE);
@@ -3848,6 +3864,7 @@ static void rna_def_object_visibility(StructRNA *srna)
       "Holdout",
       "Render objects as a holdout or matte, creating a hole in the image with zero alpha, to "
       "fill out in compositing with real footage or another render");
+  RNA_def_property_ui_icon(prop, ICON_HOLDOUT_OFF, 1);
   RNA_def_property_update(prop, NC_OBJECT | ND_DRAW, "rna_Object_hide_update");
 
   prop = RNA_def_property(srna, "is_shadow_catcher", PROP_BOOLEAN, PROP_NONE);
@@ -3865,7 +3882,7 @@ static void rna_def_object_visibility(StructRNA *srna)
   RNA_def_property_ui_text(
       prop,
       "Raycast Visibility",
-      "Object visibility to raycast rays. Implicitly false for Blended materials.");
+      "Object visibility to raycast rays. Implicitly false for Blended materials in EEVEE.");
   RNA_def_property_update(prop, NC_OBJECT | ND_DRAW, "rna_Object_internal_update_draw");
 }
 

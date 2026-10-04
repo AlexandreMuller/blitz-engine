@@ -726,13 +726,13 @@ static void InitBlenderContextVariables(blender::bContext *C)
 {
   blender::wmWindowManager *wm = CTX_wm_manager(C);
   blender::Scene *scene = CTX_data_scene(C);
-  blender::wmWindow *win = (blender::wmWindow *)wm->windows.first;
+  blender::wmWindow *win = wm->windows.first();
   blender::bScreen *screen = WM_window_get_active_screen(win);
 
-  for (blender::ScrArea *sa = (blender::ScrArea *)screen->areabase.first; sa; sa = sa->next) {
+  for (blender::ScrArea *sa = screen->areabase.first(); sa; sa = sa->next) {
     if (sa->spacetype == SPACE_VIEW3D) {
-      blender::ListBase *regionbase = &sa->regionbase;
-      for (blender::ARegion *region = (blender::ARegion *)regionbase->first; region;
+      blender::ListBaseT<blender::ARegion> *regionbase = &sa->regionbase;
+      for (blender::ARegion *region = regionbase->first(); region;
            region = region->next) {
         if (region->regiontype == RGN_TYPE_WINDOW) {
           if (region->regiondata) {
@@ -783,9 +783,7 @@ int main(int argc,
   bool useLocalPath = false;
   std::string hexKey;
 #endif  // WITH_GAMEENGINE_BPPLAYER
-  RAS_Rasterizer::StereoMode stereomode = RAS_Rasterizer::RAS_STEREO_NOSTEREO;
   bool stereoWindow = false;
-  bool stereoParFound = false;
   int windowLeft = 100;
   int windowTop = 100;
   int windowWidth = 640;
@@ -1310,59 +1308,6 @@ int main(int argc,
 #endif
           break;
         }
-        case 's':  // stereo mode
-        {
-          i++;
-          if ((i + 1) <= validArguments) {
-            stereoParFound = true;
-
-            if (!strcmp(argv[i],
-                        "nostereo"))  // may not be redundant if the file has different setting
-            {
-              stereomode = RAS_Rasterizer::RAS_STEREO_NOSTEREO;
-            }
-
-            // only the hardware pageflip method needs a stereo window
-            else if (!strcmp(argv[i], "hwpageflip")) {
-              stereomode = RAS_Rasterizer::RAS_STEREO_QUADBUFFERED;
-              stereoWindow = true;
-            }
-            else if (!strcmp(argv[i], "syncdoubling"))
-              stereomode = RAS_Rasterizer::RAS_STEREO_ABOVEBELOW;
-
-            else if (!strcmp(argv[i], "3dtvtopbottom"))
-              stereomode = RAS_Rasterizer::RAS_STEREO_3DTVTOPBOTTOM;
-
-            else if (!strcmp(argv[i], "anaglyph"))
-              stereomode = RAS_Rasterizer::RAS_STEREO_ANAGLYPH;
-
-            else if (!strcmp(argv[i], "sidebyside"))
-              stereomode = RAS_Rasterizer::RAS_STEREO_SIDEBYSIDE;
-
-            else if (!strcmp(argv[i], "interlace"))
-              stereomode = RAS_Rasterizer::RAS_STEREO_INTERLACED;
-
-            else if (!strcmp(argv[i], "vinterlace"))
-              stereomode = RAS_Rasterizer::RAS_STEREO_VINTERLACE;
-
-#if 0
-//					// future stuff
-//					else if (!strcmp(argv[i], "stencil")
-//						stereomode = RAS_STEREO_STENCIL;
-#endif
-            else {
-              error = true;
-              CM_Error("stereomode '" << argv[i] << "' unrecognized.");
-            }
-
-            i++;
-          }
-          else {
-            error = true;
-            CM_Error("too few options for stereo argument.");
-          }
-          break;
-        }
         case 'a':  // allow window to blend with display background
         {
           i++;
@@ -1552,6 +1497,8 @@ int main(int argc,
 #  endif  // !defined(DEBUG)
 #endif    // WIN32
 
+            IMB_colormanagement_file_read_post(bfd->main, nullptr, false, false);
+
             /* We load our own G_MAIN in blenderplayer,
              * so free the one that BKE_blender_globals_init() gives us.
              */
@@ -1565,7 +1512,6 @@ int main(int argc,
             CTX_data_scene_set(C, scene);
             G.main = maggie;
             G_MAIN = G.main;
-            IMB_colormanagement_working_space_check(bfd->main, false, false);
 
 
             if (firstTimeRunning) {
@@ -1590,48 +1536,6 @@ int main(int argc,
                 windowWidth = scene->gm.xplay;
                 windowHeight = scene->gm.yplay;
               }
-            }
-
-            // Check whether the game should be displayed in stereo
-            if (!stereoParFound) {
-              // Only use file settings when command line did not override
-              if (scene->gm.stereoflag == STEREO_ENABLED) {
-                switch (scene->gm.stereomode) {
-                  case STEREO_QUADBUFFERED: {
-                    stereomode = RAS_Rasterizer::RAS_STEREO_QUADBUFFERED;
-                    break;
-                  }
-                  case STEREO_ABOVEBELOW: {
-                    stereomode = RAS_Rasterizer::RAS_STEREO_ABOVEBELOW;
-                    break;
-                  }
-                  case STEREO_INTERLACED: {
-                    stereomode = RAS_Rasterizer::RAS_STEREO_INTERLACED;
-                    break;
-                  }
-                  case STEREO_ANAGLYPH: {
-                    stereomode = RAS_Rasterizer::RAS_STEREO_ANAGLYPH;
-                    break;
-                  }
-                  case STEREO_SIDEBYSIDE: {
-                    stereomode = RAS_Rasterizer::RAS_STEREO_SIDEBYSIDE;
-                    break;
-                  }
-                  case STEREO_VINTERLACE: {
-                    stereomode = RAS_Rasterizer::RAS_STEREO_VINTERLACE;
-                    break;
-                  }
-                  case STEREO_3DTVTOPBOTTOM: {
-                    stereomode = RAS_Rasterizer::RAS_STEREO_3DTVTOPBOTTOM;
-                    break;
-                  }
-                }
-                if (stereomode == RAS_Rasterizer::RAS_STEREO_QUADBUFFERED)
-                  stereoWindow = true;
-              }
-            }
-            else {
-              scene->gm.stereoflag = STEREO_ENABLED;
             }
 
             if (!samplesParFound)
@@ -1722,8 +1626,8 @@ int main(int argc,
               }
             }
 
-            blender::wmWindowManager *wm = (blender::wmWindowManager *)bfd->main->wm.first;
-            blender::wmWindow *win = (blender::wmWindow *)wm->windows.first;
+            blender::wmWindowManager *wm = bfd->main->wm.first();
+            blender::wmWindow *win = wm->windows.first();
             CTX_wm_manager_set(C, wm);
             CTX_wm_window_set(C, win);
             InitBlenderContextVariables(C);
@@ -1732,7 +1636,7 @@ int main(int argc,
             InitBlenderContextVariables(C);
 
             /* Get rid of windows which are not the 3D view windows */
-            for (blender::wmWindow *win_in_list = (blender::wmWindow *)wm->windows.first; win_in_list; win_in_list = win_in_list->next) {
+            for (blender::wmWindow *win_in_list = wm->windows.first(); win_in_list; win_in_list = win_in_list->next) {
               if (win_in_list == win) {
                 continue;
               }
@@ -1763,7 +1667,7 @@ int main(int argc,
             // wm_init_scripts_extensions_once(C);
 
             WM_keyconfig_update_postpone_end();
-            WM_keyconfig_update(static_cast<blender::wmWindowManager *>(G_MAIN->wm.first));
+            WM_keyconfig_update(G_MAIN->wm.first());
 
             blender::bScreen *screen = WM_window_get_active_screen(win);
             screen->state = SCREENFULL;
@@ -1778,7 +1682,7 @@ int main(int argc,
               area_iter->full = screen;
               /* tag all areas for full redraw at least 1 time to prevent bugs during wm_draw_update */
               ED_area_tag_redraw(area_iter);
-              for (blender::ARegion *region = (blender::ARegion *)area_iter->regionbase.first; region; region = region->next) {
+              for (blender::ARegion *region = area_iter->regionbase.first(); region; region = region->next) {
                 region->runtime->visible = 0;
               }
             }
@@ -1796,7 +1700,6 @@ int main(int argc,
                                        maggie,
                                        scene,
                                        &gs,
-                                       stereomode,
                                        aasamples,
                                        argc,
                                        argv,
@@ -1833,7 +1736,7 @@ int main(int argc,
           blender::wmWindowManager *wm = CTX_wm_manager(C);
           WM_jobs_kill_all(wm);
 
-          for (blender::wmWindow *win = (blender::wmWindow *)wm->windows.first; win; win = win->next) {
+          for (blender::wmWindow *win = wm->windows.first(); win; win = win->next) {
             CTX_wm_window_set(C, win); /* needed by operator close callbacks */
             WM_event_remove_handlers(C, &win->runtime->handlers);
             WM_event_remove_handlers(C, &win->runtime->modalhandlers);

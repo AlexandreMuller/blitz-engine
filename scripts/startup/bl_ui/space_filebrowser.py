@@ -787,37 +787,16 @@ class ASSETBROWSER_PT_metadata(asset_utils.AssetBrowserPanel, Panel):
         asset is in the current file). Empty, non-editable fields are not really useful.
         """
         if getattr(asset_metadata, propname) or not asset_metadata.is_property_readonly(propname):
-            split = layout.split(factor=0.4)
             ui_name = asset_metadata.rna_type.properties[propname].name
-            sub = split.row()
-            sub.alignment = 'RIGHT'
-            sub.label(text=ui_name)
             if asset_metadata.is_property_readonly(propname):
-                split.label_multiline(
-                    text=getattr(asset_metadata, propname))
-            else:
-                split.textbox(asset_metadata, propname, placeholder=ui_name,
-                              initial_visible_lines=initial_visible_lines)
-
-    @staticmethod
-    def _webpage_prop(layout, asset_metadata):
-        """
-        Only display the webpage property when is either set or can be modified (i.e. the
-        asset is in the current file).
-        """
-        if getattr(asset_metadata, "webpage") or not asset_metadata.is_property_readonly("webpage"):
-            ui_name = asset_metadata.rna_type.properties["webpage"].name
-            if asset_metadata.is_property_readonly("webpage"):
-                split = layout.split(factor=0.4)
+                split = layout.split(factor=layout.property_split_factor)
                 sub = split.row()
                 sub.alignment = 'RIGHT'
                 sub.label(text=ui_name)
-                url = getattr(asset_metadata, "webpage")
-                sub = split.row()
-                sub.alignment = 'LEFT'
-                sub.link(url=url, text=url)
+                split.label_multiline(text=getattr(asset_metadata, propname))
             else:
-                layout.prop(asset_metadata, "webpage", placeholder=ui_name)
+                layout.textbox(asset_metadata, propname, placeholder=ui_name,
+                               initial_visible_lines=initial_visible_lines)
 
     def draw(self, context):
         layout = self.layout
@@ -864,7 +843,6 @@ class ASSETBROWSER_PT_metadata(asset_utils.AssetBrowserPanel, Panel):
         self.metadata_prop(layout, metadata, "license")
         self.metadata_prop(layout, metadata, "copyright")
         self.metadata_prop(layout, metadata, "author")
-        self._webpage_prop(layout, metadata)
 
 
 class ASSETBROWSER_PT_import(asset_utils.AssetMetaDataPanel, Panel):
@@ -972,20 +950,9 @@ class ASSETBROWSER_MT_context_menu(AssetBrowserMenu, Menu):
         st = context.space_data
         params = st.params
 
-        add_separator = False
         if bpy.ops.asset.assets_download.poll():
             layout.operator("asset.assets_download", icon='DOWNLOAD')
-            add_separator = True
-        if context.asset and context.asset.metadata.webpage:
-            layout.operator("wm.url_open", text="Visit Webpage", icon='URL').url = context.asset.metadata.webpage
-            add_separator = True
-        if add_separator:
             layout.separator()
-
-        layout.operator("asset.library_refresh", icon='FILE_REFRESH')
-        layout.operator("asset.library_reload_listing", text="Refresh Remote Listing")
-
-        layout.separator()
 
         sub = layout.column()
         sub.operator_context = 'EXEC_DEFAULT'
@@ -996,6 +963,11 @@ class ASSETBROWSER_MT_context_menu(AssetBrowserMenu, Menu):
 
         layout.operator("asset.open_containing_blend_file", icon='FILE_BLEND')
         layout.operator("asset.browse_containing_blend_file")
+
+        layout.separator()
+
+        layout.operator("asset.library_refresh", icon='FILE_REFRESH')
+        layout.operator("asset.library_reload_listing", text="Refresh Remote Listing")
 
         layout.separator()
 

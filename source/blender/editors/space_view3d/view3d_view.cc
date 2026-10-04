@@ -58,6 +58,7 @@
 #  include "BKE_camera.h"
 #  include "BKE_image.hh"
 #  include "BKE_image_gpu.hh"
+#  include "wm_event_system.hh"
 
 #  include "LA_SystemCommandLine.h"
 #endif
@@ -88,6 +89,7 @@ static wmOperatorStatus view3d_camera_to_view_exec(bContext *C, wmOperator * /*o
 
   ED_view3d_to_object(depsgraph, v3d->camera, rv3d->ofs, rv3d->viewquat, rv3d->dist, 0.0f);
   rv3d->camroll = 0.0f;
+  rv3d->rflag &= ~RV3D_FLIP_X;
 
   BKE_object_tfm_protected_restore(v3d->camera, &obtfm, v3d->camera->protectflag);
 
@@ -203,7 +205,7 @@ static void sync_viewport_camera_smoothview(bContext *C,
           }
           /* Checking the other view is needed to prevent local cameras being modified. */
           if (v3d->scenelock && other_v3d->scenelock) {
-            ListBaseT<ARegion> *lb = (&space_link == area.spacedata.first) ?
+            ListBaseT<ARegion> *lb = (&space_link == area.spacedata.first_) ?
                                          &area.regionbase :
                                          &space_link.regionbase;
             for (ARegion &other_region : *lb) {
@@ -401,10 +403,13 @@ static void obmat_to_viewmat(RegionView3D *rv3d, Object *ob)
   invert_m4_m4(rv3d->viewmat, bmat);
 
   /* view quat calculation, needed for add object */
-  // mat4_normalized_to_quat(rv3d->viewquat, rv3d->viewmat);
+  mat4_normalized_to_quat(rv3d->viewquat, rv3d->viewmat);
 
-  /* UPBGE (to avoid an annoying assert -> will normalize anyway) */
-  mat4_to_quat(rv3d->viewquat, rv3d->viewmat);
+  if (rv3d->rflag & RV3D_FLIP_X) {
+    transpose_m4(rv3d->viewmat);
+    negate_v4(rv3d->viewmat[0]);
+    transpose_m4(rv3d->viewmat);
+  }
 }
 
 void view3d_viewmatrix_set(const Depsgraph *depsgraph,
@@ -867,7 +872,7 @@ static uint free_localview_bit(Main *bmain)
    * Check all areas: which local-views are in use? */
   for (bScreen &screen : bmain->screens) {
     for (ScrArea &area : screen.areabase) {
-      SpaceLink *sl = static_cast<SpaceLink *>(area.spacedata.first);
+      SpaceLink *sl = area.spacedata.first_as<SpaceLink>();
       for (; sl; sl = sl->next) {
         if (sl->spacetype == SPACE_VIEW3D) {
           View3D *v3d = reinterpret_cast<View3D *>(sl);
@@ -899,7 +904,7 @@ static bool view3d_localview_init(const Depsgraph *depsgraph,
                                   const int smooth_viewtx,
                                   ReportList *reports)
 {
-  View3D *v3d = static_cast<View3D *>(area->spacedata.first);
+  View3D *v3d = area->spacedata.first_as<View3D>();
   float3 min, max, box;
   float size = 0.0f;
   uint local_view_bit;
@@ -1043,7 +1048,7 @@ static bool view3d_localview_exit(const Depsgraph *depsgraph,
                                   const bool frame_selected,
                                   const int smooth_viewtx)
 {
-  View3D *v3d = static_cast<View3D *>(area->spacedata.first);
+  View3D *v3d = area->spacedata.first_as<View3D>();
   bool changed = false;
 
   if (v3d->localvd == nullptr) {
@@ -1424,7 +1429,7 @@ void ED_view3d_local_collections_reset(const bContext *C, const bool reset_all)
 static void view3d_xr_mirror_begin(RegionView3D *rv3d)
 {
   /* If there is no session yet, changes below should not be applied! */
-  BLI_assert(WM_xr_session_exists(&((wmWindowManager *)G_MAIN->wm.first)->xr));
+  BLI_assert(WM_xr_session_exists(&((wmWindowManager *)G_MAIN->wm.first_)->xr));
 
   rv3d->runtime_viewlock |= RV3D_LOCK_ANY_TRANSFORM;
   /* Force perspective view. This isn't reset but that's not really an issue. */
@@ -1538,6 +1543,7 @@ static void game_engine_restore_state(bContext *C, wmWindow *win)
   }
   /* check because closing win can set to NULL */
   if (win) {
+    wm_event_free_all(win);
     win->runtime->event_queue = events_queue_back;
   }
 
@@ -1619,7 +1625,7 @@ static wmOperatorStatus game_engine_exec(bContext *C, wmOperator *op)
 
   /* Don't allow to start from other window than main blender window -
    * Blenderplayer will also only use main blender window */
-  if (CTX_wm_window(C) != (wmWindow *)wm->windows.first) {
+  if (CTX_wm_window(C) != wm->windows.first()) {
     BKE_report(op->reports, RPT_ERROR, "Game engine must be started from main blender/upbge window");
     return OPERATOR_CANCELLED;
   }

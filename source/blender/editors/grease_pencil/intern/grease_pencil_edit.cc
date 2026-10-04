@@ -5143,9 +5143,9 @@ static wmOperatorStatus grease_pencil_set_stroke_type_exec(bContext *C, wmOperat
     fill_ids.finish();
 
     if (type == StrokeType::Stroke) {
-      if (std::all_of(fill_ids.span.begin(), fill_ids.span.end(), [&](const int64_t fill_id) {
-            return fill_id == 0;
-          }))
+      if (std::all_of(fill_ids.span.begin(),
+                      fill_ids.span.end(),
+                      [&](const int64_t fill_id) { return fill_id == 0; }))
       {
         /* Remove #fill_id attribute if there are no fills left. */
         attributes.remove("fill_id");
@@ -5552,6 +5552,7 @@ void ED_operatortypes_grease_pencil_edit()
   WM_operatortype_append(GREASE_PENCIL_OT_set_stroke_type);
   WM_operatortype_append(GREASE_PENCIL_OT_join_fills);
   WM_operatortype_append(GREASE_PENCIL_OT_separate_fills);
+  WM_operatortype_append(GREASE_PENCIL_OT_stroke_carver);
 }
 
 /* -------------------------------------------------------------------- */

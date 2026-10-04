@@ -236,20 +236,23 @@ void OneapiDevice::build_bvh(BVH *bvh, Progress &progress, bool refit)
 
 size_t OneapiDevice::get_free_mem() const
 {
-  /* Accurate: Use device info, which is practically useful only on dGPU.
-   * This is because for non-discrete GPUs, all GPU memory allocations would
-   * be in the RAM, thus having the same performance for device and host pointers,
-   * so there is no need to be very accurate about what would end where. */
-  const sycl::device &device = reinterpret_cast<sycl::queue *>(device_queue_)->get_device();
-  const bool is_integrated_gpu = device.get_info<sycl::info::device::host_unified_memory>();
-  if (device.has(sycl::aspect::ext_intel_free_memory) && is_integrated_gpu == false) {
-    return device.get_info<sycl::ext::intel::info::device::free_memory>();
-  }
+  size_t free_memory = 0;
+
   /* Estimate: Capacity - in use. */
-  if (device_mem_in_use < max_memory_on_device_) {
-    return max_memory_on_device_ - device_mem_in_use;
+  const size_t resident_memory = stats.mem_used - map_host_used;
+  if (resident_memory < max_memory_on_device_) {
+    free_memory = max_memory_on_device_ - resident_memory;
   }
-  return 0;
+
+  /* Accurate: Use device info.
+   * Some drivers don't update free memory promptly after allocations, so we
+   * clamp to previous estimate to avoid over-reporting. */
+  const sycl::device &device = reinterpret_cast<sycl::queue *>(device_queue_)->get_device();
+  if (device.has(sycl::aspect::ext_intel_free_memory)) {
+    free_memory = min(device.get_info<sycl::ext::intel::info::device::free_memory>(), free_memory);
+  }
+
+  return free_memory;
 }
 
 bool OneapiDevice::load_kernels(const uint64_t requested_features)
@@ -366,7 +369,7 @@ bool OneapiDevice::shared_alloc(void *&shared_pointer, const size_t size)
   return shared_pointer != nullptr;
 }
 
-void OneapiDevice::shared_free(void *shared_pointer)
+void OneapiDevice::shared_free(void *shared_pointer, const size_t /*size*/)
 {
   usm_free(device_queue_, shared_pointer);
 }
@@ -946,7 +949,7 @@ void OneapiDevice::image_free(device_image &mem)
           (sycl::ext::oneapi::experimental::image_mem_handle::raw_handle_type)cmem.array};
 
       try {
-        /* We have allocated only standard image, so we also deallocate only them. */
+        /* We have allocated only standard images, so we also deallocate only them. */
         sycl::ext::oneapi::experimental::free_image_mem(
             imgHandle, sycl::ext::oneapi::experimental::image_type::standard, *queue);
       }
@@ -1264,7 +1267,8 @@ void OneapiDevice::set_global_memory(SyclQueue *queue_,
 
 /* This macro will change global ptr of KernelGlobals via name matching. */
 #  define KERNEL_DATA_ARRAY(type, name) \
-    else if (#name == matched_name) { \
+    else if (#name == matched_name) \
+    { \
       globals->__##name = (type *)memory_device_pointer; \
       return; \
     }
@@ -1276,7 +1280,8 @@ void OneapiDevice::set_global_memory(SyclQueue *queue_,
   }
   KERNEL_DATA_ARRAY(KernelData, data)
 #  include "kernel/data_arrays.h"
-  else {
+  else
+  {
     std::cerr << "Can't found global/constant memory with name \"" << matched_name << "\"!"
               << std::endl;
     assert(false);
@@ -1616,10 +1621,10 @@ void OneapiDevice::architecture_information(const SyclDevice *device,
       reinterpret_cast<const sycl::device *>(device)
           ->get_info<sycl::ext::oneapi::experimental::info::device::architecture>();
 
-#  define FILL_ARCH_INFO(architecture_code, is_arch_optimised) \
+#  define FILL_ARCH_INFO(architecture_code, is_arch_optimized) \
     case sycl::ext::oneapi::experimental::architecture ::architecture_code: \
       name = #architecture_code; \
-      is_optimized = is_arch_optimised; \
+      is_optimized = is_arch_optimized; \
       break;
 
   /* List of architectures that have been optimized by Intel and Blender developers.
@@ -1696,13 +1701,13 @@ char *OneapiDevice::device_capabilities()
                  << device.get_platform().get_info<sycl::info::platform::name>() << "\n";
 
     string arch_name;
-    bool is_optimised_for_arch;
+    bool is_optimized_for_arch;
     architecture_information(
-        reinterpret_cast<const SyclDevice *>(&device), arch_name, is_optimised_for_arch);
+        reinterpret_cast<const SyclDevice *>(&device), arch_name, is_optimized_for_arch);
     capabilities << "\t\tsycl::info::device::architecture\t\t\t";
     capabilities << arch_name << "\n";
     capabilities << "\t\tsycl::info::device::is_cycles_optimized\t\t\t";
-    capabilities << is_optimised_for_arch << "\n";
+    capabilities << is_optimized_for_arch << "\n";
     capabilities << "\t\tsycl::info::device::meets_driver_requirement\t\t\t";
     capabilities << entry.meets_driver_requirement << "\n";
 
@@ -1824,9 +1829,9 @@ void OneapiDevice::iterate_devices(OneAPIDeviceIteratorCallback cb, void *user_p
     std::string id = "ONEAPI_" + platform_name + "_" + name;
 
     string arch_name;
-    bool is_optimised_for_arch;
+    bool is_optimized_for_arch;
     architecture_information(
-        reinterpret_cast<const SyclDevice *>(&device), arch_name, is_optimised_for_arch);
+        reinterpret_cast<const SyclDevice *>(&device), arch_name, is_optimized_for_arch);
 
     if (device.has(sycl::aspect::ext_intel_pci_address)) {
       id.append("_" + device.get_info<sycl::ext::intel::info::device::pci_address>());
@@ -1836,7 +1841,7 @@ void OneapiDevice::iterate_devices(OneAPIDeviceIteratorCallback cb, void *user_p
          num,
          hwrt_support,
          oidn_support,
-         is_optimised_for_arch,
+         is_optimized_for_arch,
          entry.meets_driver_requirement,
          user_ptr);
     num++;

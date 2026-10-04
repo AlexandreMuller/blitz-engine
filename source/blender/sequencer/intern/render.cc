@@ -104,16 +104,14 @@ DrawViewFn view3d_fn = nullptr; /* nullptr in background mode */
 /** \name Color-space utility functions
  * \{ */
 
-void seq_imbuf_assign_spaces(const Scene *scene, ImBuf *ibuf)
+void seq_imbuf_assign_sequencer_space(const Scene *scene, ImBuf *ibuf)
 {
-#if 0
-  /* Byte buffer is supposed to be in sequencer working space already. */
-  if (ibuf->rect != nullptr) {
-    IMB_colormanagement_assign_byte_colorspace(ibuf, scene->sequencer_colorspace_settings.name);
-  }
-#endif
+  const char *name = scene->sequencer_colorspace_settings.name;
   if (ibuf->float_data() != nullptr) {
-    IMB_colormanagement_assign_float_colorspace(ibuf, scene->sequencer_colorspace_settings.name);
+    IMB_colormanagement_assign_float_colorspace(ibuf, name);
+  }
+  if (ibuf->byte_data() != nullptr) {
+    IMB_colormanagement_assign_byte_colorspace(ibuf, name);
   }
 }
 
@@ -373,7 +371,7 @@ static bool seq_input_have_to_preprocess(const Strip *strip)
     return true;
   }
 
-  if (strip->modifiers.first) {
+  if (strip->modifiers.first_) {
     return true;
   }
 
@@ -666,7 +664,7 @@ static SeqResult input_preprocess(const RenderData *context,
   const bool do_scale_to_render_size = seq_need_scale_to_render_size(strip, is_proxy_image);
   const float image_scale_factor = do_scale_to_render_size ? preview_scale_factor : 1.0f;
 
-  if (strip->modifiers.first) {
+  if (strip->modifiers.first_) {
     result.image = IMB_makeSingleUser(result.image);
     float3x3 matrix = calc_strip_transform_matrix(scene,
                                                   strip,
@@ -886,7 +884,7 @@ static ImBuf *seq_render_image_strip_view(
   }
 
   if (prefix[0] == '\0') {
-    ibuf = IMB_load_image_from_filepath(filepath, flag, strip->data->colorspace_settings.name);
+    ibuf = IMB_load_image_from_filepath(filepath, flag, &strip->data->colorspace_settings);
   }
   else {
     char filepath_view[FILE_MAX];
@@ -895,8 +893,7 @@ static ImBuf *seq_render_image_strip_view(
     {
       return nullptr;
     }
-    ibuf = IMB_load_image_from_filepath(
-        filepath_view, flag, strip->data->colorspace_settings.name);
+    ibuf = IMB_load_image_from_filepath(filepath_view, flag, &strip->data->colorspace_settings);
   }
 
   if (ibuf == nullptr) {
@@ -1039,7 +1036,7 @@ static ImBuf *seq_render_movie_strip_custom_file_proxy(const RenderData *context
       /* Sequencer takes care of colorspace conversion of the result. The input is the best to be
        * kept unchanged for the performance reasons. */
       proxy->anim = openanim(
-          filepath, ImBufFlags::Zero, 0, true, strip->data->colorspace_settings.name);
+          filepath, ImBufFlags::Zero, 0, true, &strip->data->colorspace_settings);
     }
     if (proxy->anim == nullptr) {
       return nullptr;
@@ -1132,11 +1129,11 @@ static ImBuf *seq_render_movie_strip(const RenderData *context,
     /* Opening individual multiview files is all-or-nothing. Fall back to the original filepath if
      * any view cannot be opened. */
     if (do_multiview_render && strip->views_format == R_IMF_VIEWS_INDIVIDUAL) {
-      bool all_readers_open = static_cast<bool>(readers[0]);
+      bool all_readers_open = bool(readers[0]);
       for (int view_id = 1; view_id < totfiles && all_readers_open; view_id++) {
         readers.append(movie_reader_cache_acquire_view(
             cache_scene, *context->scene, *strip, view_id, frame_index));
-        all_readers_open = static_cast<bool>(readers.last());
+        all_readers_open = bool(readers.last());
       }
       if (!all_readers_open) {
         readers.clear();
@@ -1655,7 +1652,7 @@ ImBuf *render_scene_strip_thumbnail(
     return nullptr;
   }
   Scene *scene = strip->scene;
-  if (scene == nullptr || scene == timeline_scene) {
+  if (ELEM(scene, nullptr, timeline_scene)) {
     return nullptr; /* No scene, or recursion with sequencer scene. */
   }
 
@@ -2048,7 +2045,7 @@ static SeqResult seq_render_strip_stack(const RenderData *context,
           ibuf1.image = IMB_allocImBuf(context->rectx,
                                        context->recty,
                                        use_float ? ImBufFlags::FloatData : ImBufFlags::ByteData);
-          seq_imbuf_assign_spaces(context->scene, ibuf1.image);
+          seq_imbuf_assign_sequencer_space(context->scene, ibuf1.image);
 
           out = seq_render_strip_stack_apply_effect(
               context, state, strip, timeline_frame, ibuf1, ibuf2);

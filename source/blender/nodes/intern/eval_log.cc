@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup nodes
+ */
+
 #include "NOD_eval_log.hh"
 #include "NOD_geometry_nodes_bundle.hh"
 #include "NOD_geometry_nodes_closure.hh"
@@ -108,17 +112,16 @@ GeometryInfoLog::GeometryInfoLog(const bke::GeometrySet &geometry_set)
    * attributes with the same name but different domains or data types on separate components. */
   Set<StringRef> names;
 
-  geometry_set.attribute_foreach(all_component_types,
-                                 true,
-                                 [&](const StringRef name,
-                                     const bke::AttributeMetaData &meta_data,
-                                     const bke::GeometryComponent & /*component*/) {
-                                   if (!bke::attribute_name_is_anonymous(name) && names.add(name))
-                                   {
-                                     this->attributes.append(
-                                         {name, meta_data.domain, meta_data.data_type});
-                                   }
-                                 });
+  geometry_set.attribute_foreach(
+      all_component_types,
+      true,
+      [&](const StringRef name,
+          const bke::AttributeMetaData &meta_data,
+          const bke::GeometryComponent & /*component*/) {
+        if (!bke::attribute_name_is_anonymous(name) && names.add(name)) {
+          this->attributes.append({name, meta_data.domain, meta_data.data_type});
+        }
+      });
 
   for (const bke::GeometryComponent *component : geometry_set.get_components()) {
     this->component_types.append(component->type());
@@ -332,8 +335,8 @@ void NodeTreeLogger::log_value(const bNode &node, const bNodeSocket &socket, con
 
   if (type.is<bke::SocketValueVariant>()) {
     bke::SocketValueVariant value_variant = *value.get<bke::SocketValueVariant>();
-    if (value_variant.valid_for_socket(SOCK_GEOMETRY)) {
-      const bke::GeometrySet &geometry = value_variant.get<bke::GeometrySet>();
+    if (value_variant.get().is_type<bke::GeometrySet>()) {
+      const bke::GeometrySet &geometry = *value_variant.get_if<bke::GeometrySet>();
       store_logged_value(this->allocator->construct<GeometryInfoLog>(geometry));
     }
     else if (value_variant.is_context_dependent_field()) {
@@ -350,7 +353,7 @@ void NodeTreeLogger::log_value(const bNode &node, const bNodeSocket &socket, con
       const auto list = value_variant.extract<GListPtr>();
       store_logged_value(this->allocator->construct<ListInfoLog>(list));
     }
-    else if (value_variant.valid_for_socket(SOCK_BUNDLE)) {
+    else if (value_variant.get().is_type<BundlePtr>()) {
       Vector<BundleValueLog::Item> items;
       if (const BundlePtr bundle = value_variant.extract<BundlePtr>()) {
         for (const auto &item : bundle->items()) {
@@ -368,7 +371,7 @@ void NodeTreeLogger::log_value(const bNode &node, const bNodeSocket &socket, con
       }
       store_logged_value(this->allocator->construct<BundleValueLog>(std::move(items)));
     }
-    else if (value_variant.valid_for_socket(SOCK_CLOSURE)) {
+    else if (value_variant.get().is_type<ClosurePtr>()) {
       Vector<ClosureValueLog::Item> inputs;
       Vector<ClosureValueLog::Item> outputs;
       std::optional<ClosureSourceLocation> source_location;
@@ -388,8 +391,7 @@ void NodeTreeLogger::log_value(const bNode &node, const bNodeSocket &socket, con
           std::move(inputs), std::move(outputs), source_location, eval_log));
     }
     else {
-      value_variant.convert_to_single();
-      const GPointer value = value_variant.get_single_ptr();
+      const GPointer value = value_variant.get();
       if (value.type()->is<std::string>()) {
         const std::string &string = *value.get<std::string>();
         store_logged_value(this->allocator->construct<StringLog>(string, *this->allocator));
@@ -416,7 +418,7 @@ const bke::GeometrySet *ViewerNodeLog::main_geometry() const
     for (const Item &item : this->items) {
 #ifdef WITH_OPENVDB
       if (item.value.is_volume_grid()) {
-        const bke::GVolumeGrid grid = item.value.get<bke::GVolumeGrid>();
+        const bke::GVolumeGrid grid = *item.value.get_if<bke::GVolumeGrid>();
         Volume *volume = BKE_id_new_nomain<Volume>(nullptr);
         grid->add_user();
         BKE_volume_grid_add(volume, grid.get());
@@ -424,30 +426,13 @@ const bke::GeometrySet *ViewerNodeLog::main_geometry() const
         return;
       }
 #endif
-      if (item.value.is_single() && item.value.get_single_ptr().is_type<bke::GeometrySet>()) {
-        main_geometry_cache_ = *item.value.get_single_ptr().get<bke::GeometrySet>();
+      if (item.value.is_single() && item.value.get().is_type<bke::GeometrySet>()) {
+        main_geometry_cache_ = *item.value.get().get<bke::GeometrySet>();
         return;
       }
     }
   });
   return main_geometry_cache_ ? &*main_geometry_cache_ : nullptr;
-}
-
-static bool warning_is_propagated(const NodeWarningPropagation propagation,
-                                  const NodeWarningType warning_type)
-{
-  switch (propagation) {
-    case NODE_WARNING_PROPAGATION_ALL:
-      return true;
-    case NODE_WARNING_PROPAGATION_NONE:
-      return false;
-    case NODE_WARNING_PROPAGATION_ONLY_ERRORS:
-      return warning_type == NodeWarningType::Error;
-    case NODE_WARNING_PROPAGATION_ONLY_ERRORS_AND_WARNINGS:
-      return ELEM(warning_type, NodeWarningType::Error, NodeWarningType::Warning);
-  }
-  BLI_assert_unreachable();
-  return true;
 }
 
 void NodeTreeLog::ensure_node_warnings(const NodesModifierData &nmd)

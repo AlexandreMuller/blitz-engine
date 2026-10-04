@@ -921,7 +921,7 @@ static int acf_group_setting_flag(bAnimContext *ac, eAnimChannel_Settings settin
        * proved to be a hazard for workflows...
        */
       return (ac->spacetype == SPACE_GRAPH) ? AGRP_EXPANDED_G : /* Graph Editor case */
-                                              AGRP_EXPANDED;                                 /* DopeSheet and elsewhere */
+                                              AGRP_EXPANDED;    /* DopeSheet and elsewhere */
     }
 
     case ACHANNEL_SETTING_MUTE: /* muted */
@@ -5520,7 +5520,7 @@ static bool anim_list_el_is_visibility_related_or_self(const bAnimListElem *targ
   }
 
   /* 2. Hierarchy Roots (Summary/Scene) - Always keep structure visible */
-  if (iter->type == ANIMTYPE_SUMMARY || iter->type == ANIMTYPE_SCENE) {
+  if (ELEM(iter->type, ANIMTYPE_SUMMARY, ANIMTYPE_SCENE)) {
     return true;
   }
 

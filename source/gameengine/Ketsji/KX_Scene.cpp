@@ -275,7 +275,6 @@ KX_Scene::KX_Scene(SCA_IInputDevice *inputDevice,
       m_currentGPUViewport(nullptr),          // eevee
       m_overlayCamera(nullptr),               // eevee (For overlay collections)
       m_sceneConverter(nullptr),              // eevee
-      m_isPythonMainLoop(false),              // eevee
       m_collectionRemap(false),               // eevee (to uncheck viewport restrictflag)
       m_keyboardmgr(nullptr),
       m_mousemgr(nullptr),
@@ -286,8 +285,7 @@ KX_Scene::KX_Scene(SCA_IInputDevice *inputDevice,
       m_ueberExecutionPriority(0),
       m_blenderScene(scene),
       m_isActivedHysteresis(false),
-      m_lodHysteresisValue(0),
-      m_isRuntime(true)  // eevee
+      m_lodHysteresisValue(0)
 {
 
   m_dbvt_culling = false;
@@ -437,9 +435,6 @@ KX_Scene::~KX_Scene()
 #endif  // WITH_PYTHON
 
   /* EEVEE INTEGRATION */
-
-  m_isRuntime = false;  // eevee
-
   ReinitBlenderContextVariables();
 
   blender::Scene *scene = GetBlenderScene();
@@ -581,15 +576,15 @@ void KX_Scene::ReinitBlenderContextVariables()
 {
   blender::bContext *C = KX_GetActiveEngine()->GetContext();
   blender::wmWindowManager *wm = CTX_wm_manager(C);
-  blender::wmWindow *win = (blender::wmWindow *)wm->windows.first;
+  blender::wmWindow *win = wm->windows.first();
   blender::bScreen *screen = WM_window_get_active_screen(win);
 
-  for (blender::ScrArea *sa = (blender::ScrArea *)screen->areabase.first; sa; sa = sa->next) {
+  for (blender::ScrArea *sa = screen->areabase.first(); sa; sa = sa->next) {
     /* We choose the biggest blender::ScrArea to match the behaviour in WM_init_game */
     if (sa->spacetype == SPACE_VIEW3D &&
         sa == BKE_screen_find_big_area(screen, SPACE_VIEW3D, 0)) {
-      blender::ListBase *regionbase = &sa->regionbase;
-      for (blender::ARegion *region = (blender::ARegion *)regionbase->first; region; region = region->next) {
+      blender::ListBaseT<blender::ARegion> *regionbase = &sa->regionbase;
+      for (blender::ARegion *region = regionbase->first(); region; region = region->next) {
         if (region->regiontype == RGN_TYPE_WINDOW) {
           if (region->regiondata) {
             CTX_wm_window_set(C, win);
@@ -793,7 +788,7 @@ bool KX_Scene::CameraIsInactive(KX_Camera *cam)
 }
 
 static RAS_Rasterizer::FrameBufferType r = RAS_Rasterizer::RAS_FRAMEBUFFER_FILTER0;
-static RAS_Rasterizer::FrameBufferType s = RAS_Rasterizer::RAS_FRAMEBUFFER_EYE_LEFT0;
+static RAS_Rasterizer::FrameBufferType s = RAS_Rasterizer::RAS_FRAMEBUFFER_RENDER0;
 
 void KX_Scene::PrepareGPUViewport(KX_Camera *cam)
 {
@@ -881,6 +876,7 @@ bool KX_Scene::ViewportRender(KX_Camera *cam,
           wm_xr_events_handle(CTX_wm_manager(C));
           // wm_event_do_handlers(C);   // TODO: Find more specific XR code
           wm_event_do_notifiers(C);  // TODO: Find more specific XR code
+          ReinitBlenderContextVariables();
         }
       }
 #endif
@@ -974,16 +970,16 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
   if (cam && cam->GetViewport() && cam != GetOverlayCamera()) {
     v[0] = viewport.GetLeft();
     v[1] = viewport.GetBottom();
-    v[2] = viewport.GetWidth() + 1;
-    v[3] = viewport.GetHeight() + 1;
+    v[2] = viewport.GetWidth();
+    v[3] = viewport.GetHeight();
     window = {0, viewport.GetWidth(), 0, viewport.GetHeight()};
   }
   /* blender::Main cam (when it has no custom viewport), overlay cam */
   else {
     v[0] = 0;
     v[1] = 0;
-    v[2] = canvas->GetWidth() + 1;
-    v[3] = canvas->GetHeight() + 1;
+    v[2] = canvas->GetWidth();
+    v[3] = canvas->GetHeight();
     window = {0, canvas->GetWidth(), 0, canvas->GetHeight()};
   }
 
@@ -1066,9 +1062,9 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
   if (background_fb) {
     /* Draw this camera render into background framebuffer */
     GPU_framebuffer_bind(background_fb->GetFrameBuffer());
-    GPU_viewport(v[0], v[1], v[2], v[3]);
+    GPU_viewport(v[0], v[1], v[2] + 1, v[3] + 1);
     GPU_scissor_test(true);
-    GPU_scissor(v[0], v[1], v[2], v[3]);
+    GPU_scissor(v[0], v[1], v[2] + 1, v[3] + 1);
     rasty->DrawFrameBuffer(f, background_fb);
   }
 
@@ -1341,11 +1337,6 @@ void KX_Scene::ConvertBlenderAction(blender::bAction *action)
       logicMgr->RegisterActionName(action->id.name + 2, (void *)action);
     }
   }
-}
-
-void KX_Scene::SetIsPythonMainLoop(bool isPythonMainLoop)
-{
-  m_isPythonMainLoop = isPythonMainLoop;
 }
 
 void KX_Scene::AddObjToLodObjList(KX_GameObject *gameobj)
@@ -1794,7 +1785,7 @@ void KX_Scene::AddObjectDebugProperties(class KX_GameObject *gameobj)
     return;
   }
 
-  bProperty *prop = (bProperty *)blenderobject->prop.first;
+  bProperty *prop = blenderobject->prop.first();
 
   while (prop) {
     if (prop->flag & PROP_DEBUG)
@@ -3040,8 +3031,8 @@ PyMethodDef KX_Scene::Methods[] = {
     EXP_PYMETHODTABLE(KX_Scene, replace),
     EXP_PYMETHODTABLE(KX_Scene, drawObstacleSimulation),
     EXP_PYMETHODTABLE(KX_Scene, convertBlenderObject),
-    EXP_PYMETHODTABLE(KX_Scene, convertBlenderObjectsList),
-    EXP_PYMETHODTABLE(KX_Scene, convertBlenderCollection),
+    EXP_PYMETHODTABLE_KEYWORDS(KX_Scene, convertBlenderObjectsList),
+    EXP_PYMETHODTABLE_KEYWORDS(KX_Scene, convertBlenderCollection),
     EXP_PYMETHODTABLE(KX_Scene, convertBlenderAction),
     EXP_PYMETHODTABLE(KX_Scene, unregisterBlenderAction),
     EXP_PYMETHODTABLE(KX_Scene, addOverlayCollection),

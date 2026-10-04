@@ -840,7 +840,7 @@ bool RNA_struct_override_matches(Main *bmain,
       IDOverrideLibraryProperty *op = BKE_lib_override_library_property_find(liboverride,
                                                                              rna_path->c_str());
       IDOverrideLibraryPropertyOperation *opop = static_cast<IDOverrideLibraryPropertyOperation *>(
-          op ? op->operations.first : nullptr);
+          op ? op->operations.first_ : nullptr);
 
       if (op != nullptr) {
         /* Only set all operations from this property as used (via
@@ -881,7 +881,7 @@ bool RNA_struct_override_matches(Main *bmain,
 
               if (is_restored) {
                 CLOG_DEBUG(&LOG,
-                           "Restoreed forbidden liboverride `%s` for override data '%s'",
+                           "Restored forbidden liboverride `%s` for override data '%s'",
                            rna_path->c_str(),
                            ptr_local->owner_id->name);
                 if (r_report_flags) {
@@ -1215,7 +1215,7 @@ static void rna_property_override_collection_subitem_lookup(
   BLI_assert(opop->subitem_reference_name || !subitem_reference_id);
   /* Do not match by index only, if there are valid item names and ID.
    *
-   * Otherwise, it can end up 'matching by index' e.g. collection childrens, re-assigning
+   * Otherwise, it can end up 'matching by index' e.g. collection children, re-assigning
    * completely wrong collections only based on indices. This is especially bad when some
    * collections are _removed_ from the reference collection's children. */
   const bool ignore_index_only_lookup = (subitem_local_id || subitem_reference_id);
@@ -1522,9 +1522,7 @@ static bool override_apply_property_check_skip(Main *bmain,
 
   switch (op->rna_prop_type) {
     case PROP_POINTER: {
-      if ((static_cast<IDOverrideLibraryPropertyOperation *>(op->operations.first)->flag &
-           LIBOVERRIDE_OP_FLAG_IDPOINTER_MATCH_REFERENCE) == 0)
-      {
+      if ((op->operations.first()->flag & LIBOVERRIDE_OP_FLAG_IDPOINTER_MATCH_REFERENCE) == 0) {
         BLI_assert(id_ptr_src->owner_id == rna_property_override_property_real_id_owner(
                                                bmain, &rnaapply_ctx.ptr_src, nullptr, nullptr));
         BLI_assert(id_ptr_dst->owner_id == rna_property_override_property_real_id_owner(
@@ -1627,9 +1625,8 @@ void RNA_struct_override_apply(Main *bmain,
       if ((flag & RNA_OVERRIDE_APPLY_FLAG_SKIP_RESYNC_CHECK) == 0 &&
           (id_ptr_dst->owner_id->tag & ID_TAG_LIBOVERRIDE_NEED_RESYNC) == 0)
       {
-        if (op.rna_prop_type == PROP_POINTER && op.operations.first != nullptr &&
-            (static_cast<IDOverrideLibraryPropertyOperation *>(op.operations.first)->flag &
-             LIBOVERRIDE_OP_FLAG_IDPOINTER_MATCH_REFERENCE) != 0)
+        if (op.rna_prop_type == PROP_POINTER && op.operations.first_ != nullptr &&
+            (op.operations.first()->flag & LIBOVERRIDE_OP_FLAG_IDPOINTER_MATCH_REFERENCE) != 0)
         {
           BLI_assert(RNA_struct_is_ID(
               RNA_property_pointer_type(&rnaapply_ctx.ptr_src, rnaapply_ctx.prop_src)));

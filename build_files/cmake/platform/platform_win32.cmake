@@ -1159,6 +1159,8 @@ if((WITH_EMBREE AND EMBREE_SYCL_SUPPORT) OR (WITH_CYCLES AND WITH_CYCLES_DEVICE_
   )
   # Cycles doesn't currently support the OpenCL backend
   list(FILTER _sycl_unified_runtime_libraries_glob EXCLUDE REGEX "opencl")
+  # Only bundle the v2 Level Zero adapter, not the legacy ur_adapter_level_zero.dll (#159584).
+  list(FILTER _sycl_unified_runtime_libraries_glob EXCLUDE REGEX "ur_adapter_level_zerod?\\.dll")
 
   foreach(sycl_unified_runtime_library IN LISTS _sycl_unified_runtime_libraries_glob)
     # We do not know, which library we would discover first, debug or release, so we check for both.
@@ -1201,8 +1203,15 @@ if((WITH_EMBREE AND EMBREE_SYCL_SUPPORT) OR (WITH_CYCLES AND WITH_CYCLES_DEVICE_
 endif()
 
 if(WITH_TRACY)
-  set(Tracy_ROOT_DIR ${LIBDIR}/tracy)
   find_package(Tracy REQUIRED CONFIG)
+endif()
+
+if(WITH_JOLT)
+  find_package(Jolt REQUIRED CONFIG)
+endif()
+
+if(WITH_OPENTIMELINEIO)
+  find_package(OpenTimelineIO REQUIRED CONFIG)
 endif()
 
 # Add the MSVC directory to the path so when building with ASAN enabled tools such as

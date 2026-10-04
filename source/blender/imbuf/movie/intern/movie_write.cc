@@ -914,14 +914,14 @@ static void set_colorspace_options(AVCodecContext *c, const ColorSpace *colorspa
     c->color_primaries = AVColorPrimaries(cicp[0]);
     c->color_trc = AVColorTransferCharacteristic(cicp[1]);
     c->colorspace = (is_rgb_format) ? AVCOL_SPC_RGB : AVColorSpace(cicp[2]);
-    c->color_range = AVCOL_RANGE_JPEG;
+    /* CICP 1 means full range, FFmpeg enum is the other way around. */
+    c->color_range = (is_rgb_format || cicp[3] == 1) ? AVCOL_RANGE_JPEG : AVCOL_RANGE_MPEG;
   }
   else if (!is_rgb_format) {
-    /* Note BT.709 is wrong for sRGB.
-     * But we have been writing sRGB like this forever, and there is the so called
-     * "Quicktime gamma shift bug" that complicates things. */
-    c->color_primaries = AVCOL_PRI_BT709;
-    c->color_trc = AVCOL_TRC_BT709;
+    /* Most colorspaces will have valid CICP values from the above but if not
+     * set to unspecified (which most players treat as sRGB) */
+    c->color_primaries = AVCOL_PRI_UNSPECIFIED;
+    c->color_trc = AVCOL_TRC_UNSPECIFIED;
     c->colorspace = AVCOL_SPC_BT709;
     /* TODO(sergey): Consider making the range an option to cover more use-cases. */
     c->color_range = AVCOL_RANGE_MPEG;
@@ -939,7 +939,7 @@ static AVStream *alloc_video_stream(MovieWriter *context,
                                     int rectx,
                                     int recty,
                                     char *error,
-                                    int error_size)
+                                    int error_maxncpy)
 {
   AVStream *st;
   const AVCodec *codec;
@@ -1238,7 +1238,7 @@ static AVStream *alloc_video_stream(MovieWriter *context,
     char error_str[AV_ERROR_MAX_STRING_SIZE];
     av_make_error_string(error_str, AV_ERROR_MAX_STRING_SIZE, ret);
     CLOG_ERROR(&LOG, "Couldn't initialize video codec: %s\n", error_str);
-    BLI_strncpy(error, ffmpeg_last_error(), error_size);
+    BLI_strncpy(error, ffmpeg_last_error(), error_maxncpy);
     av_dict_free(&opts);
     avcodec_free_context(&c);
     context->video_codec = nullptr;

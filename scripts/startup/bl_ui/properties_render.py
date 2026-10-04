@@ -161,7 +161,7 @@ class RENDER_PT_color_management(RenderButtonsPanel, Panel):
         col.prop(view, "look")
 
         if view.is_hdr and not context.window.support_hdr_color:
-            row = col.split(factor=0.4)
+            row = col.split(factor=col.property_split_factor)
             row.label()
 
             if gpu.platform.backend_type_get() == 'OPENGL':
@@ -196,7 +196,7 @@ class RENDER_PT_color_management_working_space(RenderButtonsPanel, Panel):
 
         col = flow.column()
 
-        split = col.split(factor=0.4)
+        split = col.split(factor=col.property_split_factor)
         row = split.row()
         row.label(text="File")
         row.alignment = 'RIGHT'
@@ -234,6 +234,19 @@ class RENDER_PT_color_management_advanced(RenderButtonsPanel, Panel):
         col = layout.column()
         col.active = scene.view_settings.support_emulation
         col.prop(scene.display_settings, "emulation")
+
+        colorspace = context.blend_data.colorspace
+        source = colorspace.bl_rna.properties["ocio_config_source"].enum_items[colorspace.ocio_config_source]
+
+        split = layout.split(factor=layout.property_split_factor)
+        row = split.row()
+        row.alignment = 'RIGHT'
+        row.label(text="OpenColorIO Config")
+        col = split.column()
+        col.active = False
+        col.label(text=source.name)
+        if colorspace.ocio_config_source != 'BLENDER' and colorspace.ocio_config_path:
+            col.label(text=colorspace.ocio_config_path, translate=False)
 
 
 class RENDER_PT_color_management_curves(RenderButtonsPanel, Panel):

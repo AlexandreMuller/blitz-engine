@@ -220,7 +220,7 @@ ccl_device_inline void mnee_setup_manifold_vertex(KernelGlobals kg,
   /* Manifold vertex position. */
   vtx->p = sd_vtx->P;
 
-  /* Initialize constraint and its derivates. */
+  /* Initialize constraint and its derivatives. */
   vtx->a = vtx->c = zero_float4();
   vtx->b = make_float4(1.f, 0.f, 0.f, 1.f);
   vtx->constraint = zero_float2();
@@ -246,12 +246,11 @@ __attribute__((noinline))
 #else
 ccl_device_inline
 #endif
-bool mnee_compute_constraint_derivatives(
-  const int vertex_count,
-    ccl_private ManifoldVertex *vertices,
-     const ccl_private  float3 &surface_sample_pos,
-    const bool light_fixed_direction,
-    const float3 light_sample)
+bool mnee_compute_constraint_derivatives(const int vertex_count,
+                                         ccl_private ManifoldVertex *vertices,
+                                         const ccl_private float3 &surface_sample_pos,
+                                         const bool light_fixed_direction,
+                                         const float3 light_sample)
 {
   for (int vi = 0; vi < vertex_count; vi++) {
     ccl_private ManifoldVertex &v = vertices[vi];

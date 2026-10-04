@@ -523,15 +523,32 @@ if(WITH_PYTHON)
   unset(FREESTYLE_EXCLUDE_CONDITIONAL)
 
   # The glTF add-on's draco & meshopt bridge libraries, loaded at run-time by `io_scene_gltf2`.
-  # Portable Linux builds place them in `lib` beside their bundled dependencies (found via each
-  # target's `$ORIGIN` RPATH); otherwise beside the add-on where `library.py` looks for them.
-  if(UNIX AND NOT APPLE AND WITH_INSTALL_PORTABLE)
+  # Install beside their bundled dependencies, found via each target's RPATH (UNIX)
+  # or the `blender.shared` side-by-side assembly (WIN32).
+  # Non-portable installs (UNIX system installs) place them beside the add-on.
+  if(WITH_INSTALL_PORTABLE)
     set(GLTF_BRIDGE_INSTALL_DIR "${TARGETDIR_LIB}")
   else()
     set(GLTF_BRIDGE_INSTALL_DIR "${TARGETDIR_VER_LIBS}/scripts/addons_core/io_scene_gltf2")
   endif()
 
+  # Unlike `install(TARGETS)`, `install(PROGRAMS)` copies the file without rewriting its RPATH,
+  # so these must be linked with the install RPATH, see `BUILD_WITH_INSTALL_RPATH` below.
+  if(PLATFORM_BUNDLED_LIBRARIES)
+    if(APPLE)
+      set(GLTF_BRIDGE_RPATH "@loader_path")
+    elseif(UNIX)
+      set(GLTF_BRIDGE_RPATH "$ORIGIN")
+    endif()
+  endif()
+
   if(WITH_DRACO)
+    if(GLTF_BRIDGE_RPATH)
+      set_target_properties(bf_intern_draco_bridge PROPERTIES
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "${GLTF_BRIDGE_RPATH}"
+      )
+    endif()
     install(
       PROGRAMS $<TARGET_FILE:bf_intern_draco_bridge>
       DESTINATION ${GLTF_BRIDGE_INSTALL_DIR}
@@ -539,6 +556,12 @@ if(WITH_PYTHON)
   endif()
 
   if(WITH_MESHOPTIMIZER)
+    if(GLTF_BRIDGE_RPATH)
+      set_target_properties(bf_intern_meshopt_bridge PROPERTIES
+        BUILD_WITH_INSTALL_RPATH TRUE
+        INSTALL_RPATH "${GLTF_BRIDGE_RPATH}"
+      )
+    endif()
     install(
       PROGRAMS $<TARGET_FILE:bf_intern_meshopt_bridge>
       DESTINATION ${GLTF_BRIDGE_INSTALL_DIR}
@@ -546,6 +569,7 @@ if(WITH_PYTHON)
   endif()
 
   unset(GLTF_BRIDGE_INSTALL_DIR)
+  unset(GLTF_BRIDGE_RPATH)
 
 endif()
 
@@ -615,6 +639,34 @@ if(WIN32)
       CONFIGURATIONS Debug
     )
   endif()
+  if(EXISTS ${LIBDIR}/jolt/bin/jolt.dll) # 5.3+
+    windows_install_shared_manifest(
+      FILES
+        ${LIBDIR}/jolt/bin/jolt.dll
+      RELEASE
+    )
+    windows_install_shared_manifest(
+      FILES
+        ${LIBDIR}/jolt/bin/jolt_d.dll
+      DEBUG
+    )
+  endif()
+  if(EXISTS ${LIBDIR}/opentimelineio/lib/opentime.dll) # 5.3+  
+    windows_install_shared_manifest(
+      FILES
+        ${LIBDIR}/opentimelineio/lib/opentime.dll
+        ${LIBDIR}/opentimelineio/lib/opentimelineio.dll
+      RELEASE
+    )
+  endif()
+  if(EXISTS ${LIBDIR}/opentimelineio/lib/opentime_d.dll) # 5.3+  
+    windows_install_shared_manifest(
+      FILES
+        ${LIBDIR}/opentimelineio/lib/opentime_d.dll
+        ${LIBDIR}/opentimelineio/lib/opentimelineio_d.dll
+      DEBUG
+    )
+  endif()  
   if(EXISTS ${LIBDIR}/ceres/bin/ceres.dll) # 5.1+
     windows_install_shared_manifest(
       FILES
@@ -948,16 +1000,16 @@ if(UNIX AND NOT APPLE)
         install(
           DIRECTORY ${PYTHON_NUMPY_PATH}/numpy
           DESTINATION ${TARGETDIR_VER}/python/${_target_LIB}/python${PYTHON_VERSION}/${_suffix}
-          PATTERN "__pycache__" EXCLUDE           # * any cache *
-          PATTERN "*.pyc" EXCLUDE                 # * any cache *
-          PATTERN "*.pyo" EXCLUDE                 # * any cache *
-          PATTERN "oldnumeric" EXCLUDE            # ./oldnumeric
-          PATTERN "doc" EXCLUDE                   # ./doc
-          PATTERN "tests" EXCLUDE                 # ./tests
-          PATTERN "f2py" EXCLUDE                  # ./f2py - fortran/python interface code, not for blender.
-          PATTERN "include" EXCLUDE               # include dirs all over, we won't use NumPy/CAPI
-          PATTERN "*.h" EXCLUDE                   # some includes are not in include dirs
-          PATTERN "*.a" EXCLUDE                   # ./core/lib/libnpymath.a - for linking, we don't need.
+          PATTERN "__pycache__" EXCLUDE   # * any cache *
+          PATTERN "*.pyc" EXCLUDE         # * any cache *
+          PATTERN "*.pyo" EXCLUDE         # * any cache *
+          PATTERN "oldnumeric" EXCLUDE    # ./oldnumeric
+          PATTERN "doc" EXCLUDE           # ./doc
+          PATTERN "tests" EXCLUDE         # ./tests
+          PATTERN "f2py" EXCLUDE          # ./f2py - fortran/python interface code, not for blender.
+          PATTERN "include" EXCLUDE       # include dirs all over, we won't use NumPy/CAPI
+          PATTERN "*.h" EXCLUDE           # some includes are not in include dirs
+          PATTERN "*.a" EXCLUDE           # ./core/lib/libnpymath.a - for linking, we don't need.
         )
         install(
           DIRECTORY ${PYTHON_NUMPY_PATH}/Cython
@@ -1208,8 +1260,12 @@ elseif(WIN32)
       if(PDBCOPY_EXECUTABLE)
         add_custom_command(
           TARGET blender POST_BUILD
-          COMMAND ${CMAKE_COMMAND} -E rm -f ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_BUILD_TYPE}/blender_public.pdb
-          COMMAND ${PDBCOPY_EXECUTABLE} $<TARGET_PDB_FILE:blender> ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_BUILD_TYPE}/blender_public.pdb -p
+          COMMAND
+            ${CMAKE_COMMAND} -E
+            rm -f ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_BUILD_TYPE}/blender_public.pdb
+          COMMAND
+            ${PDBCOPY_EXECUTABLE} $<TARGET_PDB_FILE:blender>
+            ${CMAKE_CURRENT_BINARY_DIR}/${CMAKE_BUILD_TYPE}/blender_public.pdb -p
           COMMENT "Stripping PDB file..."
         )
       else()
@@ -1400,23 +1456,55 @@ elseif(WIN32)
           PATTERN "*.pyo" EXCLUDE                 # * any cache *
         )
       endif()
-
-      # This will not exist for 3.4 and earlier `./lib` directory
-      # to ease the transition, support both 3.4 and 3.5 `./lib` directories.
-      if(EXISTS ${USD_LIBRARY_DIR}/python/)
+      if(CMAKE_SYSTEM_PROCESSOR STREQUAL "ARM64")
+        set(_openexr_arch arm64)
+      else()
+        set(_openexr_arch amd64)
+      endif()
+      install(
+        FILES
+          ${LIBDIR}/openexr/python/openEXR/OpenEXR.cp${_PYTHON_VERSION_NO_DOTS}-win_${_openexr_arch}.pyd
+          ${LIBDIR}/openexr/python/openEXR/Imath.py
+        DESTINATION ${TARGETDIR_SITE_PACKAGES}
+        CONFIGURATIONS Release;RelWithDebInfo;MinSizeRel
+      )
+      install(
+        FILES
+          ${LIBDIR}/openexr/python/openEXR/OpenEXR_d.cp${_PYTHON_VERSION_NO_DOTS}-win_${_openexr_arch}.pyd
+          ${LIBDIR}/openexr/python/openEXR/Imath.py
+        DESTINATION ${TARGETDIR_SITE_PACKAGES}
+        CONFIGURATIONS Debug
+      )
+      install(
+        DIRECTORY ${LIBDIR}/opentimelineio/python/opentimelineio/
+        DESTINATION ${TARGETDIR_SITE_PACKAGES}/opentimelineio/
+        CONFIGURATIONS Release;RelWithDebInfo;MinSizeRel
+        PATTERN "__pycache__" EXCLUDE           # * any cache *
+        PATTERN "*.pyc" EXCLUDE                 # * any cache *
+        PATTERN "*.pyo" EXCLUDE                 # * any cache *
+        PATTERN "*_d.cp*" EXCLUDE                # * do not install debug libs * 
+      )      
+      install(
+        DIRECTORY ${LIBDIR}/opentimelineio/python/opentimelineio/
+        DESTINATION ${TARGETDIR_SITE_PACKAGES}/opentimelineio/
+        CONFIGURATIONS Debug
+        PATTERN "__pycache__" EXCLUDE           # * any cache *
+        PATTERN "*.pyc" EXCLUDE                 # * any cache *
+        PATTERN "*.pyo" EXCLUDE                 # * any cache *
+      )
+      if(WITH_USD AND USD_LIBRARY_DIR)
         install(
-          DIRECTORY ${USD_LIBRARY_DIR}/python/
-          DESTINATION ${TARGETDIR_SITE_PACKAGES}
+          DIRECTORY ${USD_LIBRARY_DIR}/site-packages/
+          DESTINATION ${TARGETDIR_SITE_PACKAGES}/
           CONFIGURATIONS Release;RelWithDebInfo;MinSizeRel
           PATTERN "__pycache__" EXCLUDE           # * any cache *
           PATTERN "*.pyc" EXCLUDE                 # * any cache *
           PATTERN "*.pyo" EXCLUDE                 # * any cache *
         )
-      endif()
-      if(EXISTS ${USD_LIBRARY_DIR}/debug/python/)
+      
         install(
-          DIRECTORY ${USD_LIBRARY_DIR}/debug/python/
-          DESTINATION ${TARGETDIR_SITE_PACKAGES}
+          DIRECTORY ${USD_LIBRARY_DIR}/debug/site-packages/
+          DESTINATION ${TARGETDIR_SITE_PACKAGES}/
           CONFIGURATIONS Debug
           PATTERN "__pycache__" EXCLUDE           # * any cache *
           PATTERN "*.pyc" EXCLUDE                 # * any cache *
@@ -1487,6 +1575,28 @@ elseif(WIN32)
       if(EXISTS ${LIBDIR}/materialx/python/Debug/MaterialX)
         install(
           DIRECTORY ${LIBDIR}/materialx/python/Debug/MaterialX
+          DESTINATION ${TARGETDIR_SITE_PACKAGES}/
+          CONFIGURATIONS Debug
+          PATTERN "__pycache__" EXCLUDE           # * any cache *
+          PATTERN "*.pyc" EXCLUDE                 # * any cache *
+          PATTERN "*.pyo" EXCLUDE                 # * any cache *
+        )
+      endif()
+      # OpenEXR python bindings.
+      # Check they exist so building against non `LIBDIR` Python works as expected.
+      if(EXISTS ${LIBDIR}/openexr/python/Release/OpenEXR)
+        install(
+          DIRECTORY ${LIBDIR}/openexr/python/Release/OpenEXR
+          DESTINATION ${TARGETDIR_SITE_PACKAGES}/
+          CONFIGURATIONS Release;RelWithDebInfo;MinSizeRel
+          PATTERN "__pycache__" EXCLUDE           # * any cache *
+          PATTERN "*.pyc" EXCLUDE                 # * any cache *
+          PATTERN "*.pyo" EXCLUDE                 # * any cache *
+        )
+      endif()
+      if(EXISTS ${LIBDIR}/openexr/python/Debug/OpenEXR)
+        install(
+          DIRECTORY ${LIBDIR}/openexr/python/Debug/OpenEXR
           DESTINATION ${TARGETDIR_SITE_PACKAGES}/
           CONFIGURATIONS Debug
           PATTERN "__pycache__" EXCLUDE           # * any cache *
@@ -1912,9 +2022,13 @@ if(WITH_PYTHON_MODULE AND LIBDIR AND NOT WIN32)
       DESTINATION ${TARGETDIR_SITE_PACKAGES}
     )
     if(APPLE)
-      set(_openvdb_filename openvdb.cpython-${PYTHON_VERSION_NO_DOTS}-darwin.so)
+      set(_openvdb_filename
+        openvdb.cpython-${PYTHON_VERSION_NO_DOTS}-darwin.so
+      )
     else()
-      set(_openvdb_filename openvdb.cpython-${PYTHON_VERSION_NO_DOTS}-${CMAKE_SYSTEM_PROCESSOR}-linux-gnu.so)
+      set(_openvdb_filename
+        openvdb.cpython-${PYTHON_VERSION_NO_DOTS}-${CMAKE_SYSTEM_PROCESSOR}-linux-gnu.so
+      )
     endif()
     install(
       FILES ${LIBDIR}/python/lib/python${PYTHON_VERSION}/site-packages/${_openvdb_filename}
@@ -2005,7 +2119,6 @@ endif()
 # -----------------------------------------------------------------------------
 # Setup link libraries
 
-add_dependencies(blender makesdna)
 target_link_libraries(blender PRIVATE ${LIB})
 unset(LIB)
 

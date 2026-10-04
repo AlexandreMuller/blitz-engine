@@ -103,7 +103,7 @@ void base_active_refresh(Main *bmain, Scene *scene, ViewLayer *view_layer)
 {
   WM_main_add_notifier(NC_SCENE | ND_OB_ACTIVE, scene);
   DEG_id_tag_update(&scene->id, ID_RECALC_SELECT);
-  wmMsgBus *mbus = (static_cast<wmWindowManager *>(bmain->wm.first))->runtime->message_bus;
+  wmMsgBus *mbus = (bmain->wm.first())->runtime->message_bus;
   if (mbus != nullptr) {
     WM_msg_publish_rna_prop(mbus, &scene->id, view_layer, LayerObjects, active);
   }
@@ -281,6 +281,7 @@ bool jump_to_object(bContext *C, Object *ob, const bool /*reveal_hidden*/)
 
     /* Make active if not active. */
     base_activate(C, base);
+    ED_outliner_select_sync_from_object_tag(C);
   }
 
   return true;
@@ -326,6 +327,7 @@ bool jump_to_bone(bContext *C, Object *ob, const char *bone_name, const bool rev
       arm->act_edbone = ebone;
 
       ED_pose_bone_select_tag_update(ob);
+      ED_outliner_select_sync_from_edit_bone_tag(C);
       return true;
     }
   }
@@ -346,6 +348,7 @@ bool jump_to_bone(bContext *C, Object *ob, const char *bone_name, const bool rev
       arm->act_bone = pchan->bone_get(*ob);
 
       ED_pose_bone_select_tag_update(ob);
+      ED_outliner_select_sync_from_pose_bone_tag(C);
       return true;
     }
   }
@@ -817,7 +820,7 @@ static bool select_grouped_collection(bContext *C, Object *ob)
   Collection *collection, *ob_collections[COLLECTION_MENU_MAX];
   int collection_count = 0, i;
 
-  for (collection = static_cast<Collection *>(bmain->collections.first);
+  for (collection = bmain->collections.first();
        collection && (collection_count < COLLECTION_MENU_MAX);
        collection = static_cast<Collection *>(collection->id.next))
   {
@@ -968,7 +971,7 @@ static bool objects_share_gameprop(Object *a, Object *b)
   bool changed = false;
   bProperty *prop;
 
-  for (prop = (bProperty *)a->prop.first; prop; prop = prop->next) {
+  for (prop = a->prop.first(); prop; prop = prop->next) {
     if (BKE_bproperty_object_get(b, prop->name)) {
       changed = true;
     }
@@ -1001,7 +1004,7 @@ static bool select_grouped_keyingset(bContext *C, Object * /*ob*/, ReportList *r
     return false;
   }
   if (animrig::validate_keyingset(C, nullptr, ks) != animrig::ModifyKeyReturn::SUCCESS) {
-    if (ks->paths.first == nullptr) {
+    if (ks->paths.first_ == nullptr) {
       if ((ks->flag & KEYINGSET_ABSOLUTE) == 0) {
         BKE_report(reports,
                    RPT_ERROR,

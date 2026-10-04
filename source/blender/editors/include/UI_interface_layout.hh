@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup editorui
+ */
+
 #pragma once
 
 #include <functional>
@@ -113,6 +117,9 @@ enum class EnumTabExpand {
 };
 
 struct Layout : public Item, NonCopyable, NonMovable {
+
+  static constexpr float PROPERTY_SPLIT_FACTOR = 0.4f;
+
  protected:
   LayoutRoot *root_ = nullptr;
   bContextStore *context_ = nullptr;
@@ -413,6 +420,12 @@ struct Layout : public Item, NonCopyable, NonMovable {
                        int max_lines = 0);
 
   /**
+   * Renders the given text rendered as markdown. Only a subset of markdown is supported:
+   * Bold, italic, code, links, lists, headers, quotes, horizontal rules.
+   */
+  void label_markdown(StringRef text);
+
+  /**
    * Adds link item, displays a url that can be clicked in the layout.
    */
   void link(StringRef url, StringRef name, int icon);
@@ -669,6 +682,7 @@ struct Layout : public Item, NonCopyable, NonMovable {
   void textbox(const bContext *C,
                PointerRNA *ptr,
                StringRefNull propname,
+               std::optional<StringRefNull> name_opt = std::nullopt,
                std::optional<StringRefNull> placeholder = std::nullopt,
                const int initial_visible_lines = 3);
   /**
@@ -678,6 +692,7 @@ struct Layout : public Item, NonCopyable, NonMovable {
   void textbox_with_state(PointerRNA *ptr,
                           StringRefNull propname,
                           TextboxState *textbox_state,
+                          std::optional<StringRefNull> name_opt = std::nullopt,
                           std::optional<StringRefNull> placeholder = std::nullopt);
 
   /**

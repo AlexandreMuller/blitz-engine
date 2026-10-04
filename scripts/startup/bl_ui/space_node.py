@@ -849,7 +849,7 @@ class NODE_PT_active_node_generic(Panel):
         col.prop(node, "show_options")
         col.prop(node, "mute")
 
-        if tree.type in ('GEOMETRY', 'COMPOSITING'):
+        if tree.type in ('GEOMETRY', 'COMPOSITING', 'SHADER'):
             layout.prop(node, "warning_propagation", text="Propagate")
 
 
@@ -1029,6 +1029,10 @@ class NODE_PT_overlay(Panel):
             subcol = col.column(align=True)
             subcol.active = overlay.show_render_size and snode.show_backdrop
 
+            subcol = col.column()
+            subcol.prop(overlay, "show_text_info")
+            subcol.active = snode.show_backdrop
+
             row = subcol.row(align=True)
             row.prop(overlay, "show_render_size", text="Render Region")
             row.prop(overlay, "passepartout_alpha", text="Passepartout")
@@ -1093,10 +1097,8 @@ class NODE_PT_node_tree_properties(Panel):
         col = layout.column()
         col.prop(group, "name", text="Name", placeholder="Name")
 
-        if group.asset_data:
-            col.prop(group.asset_data, "description", text="Description", placeholder="Description")
-        else:
-            col.prop(group, "description", text="Description", placeholder="Description")
+        data = group.asset_data if group.asset_data else group
+        col.textbox(data, "description", placeholder="Description")
 
         if not group.bl_use_group_interface:
             return

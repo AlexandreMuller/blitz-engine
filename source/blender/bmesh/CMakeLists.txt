@@ -23,6 +23,7 @@ set(SRC
   operators/bmo_connect_nonplanar.cc
   operators/bmo_connect_pair.cc
   operators/bmo_create.cc
+  operators/bmo_curve_edge_loops_between_selected.cc
   operators/bmo_dissolve.cc
   operators/bmo_dupe.cc
   operators/bmo_edgenet.cc
@@ -72,6 +73,7 @@ set(SRC
   intern/bmesh_iterators.cc
   intern/bmesh_iterators.hh
   intern/bmesh_iterators_inline.hh
+  intern/bmesh_iterators_parallel.hh
   intern/bmesh_log.cc
   intern/bmesh_log.hh
   intern/bmesh_marking.cc

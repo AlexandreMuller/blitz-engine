@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup geo
+ */
+
 #include "GEO_join_geometries.hh"
 #include "GEO_realize_instances.hh"
 
@@ -1406,12 +1410,12 @@ static void execute_realize_pointcloud_tasks(const RealizeInstancesOptions &opti
   }
 
   /* Allocate new point cloud. */
-  PointCloud *dst_pointcloud = BKE_pointcloud_new_nomain(tot_points);
+  const RealizePointCloudTask &first_task = tasks.first();
+  const PointCloud &first_pointcloud = *first_task.pointcloud_info->pointcloud;
+  PointCloud *dst_pointcloud = BKE_pointcloud_new_nomain(first_pointcloud.type, tot_points);
   r_result.geometry.replace_pointcloud(dst_pointcloud);
   bke::MutableAttributeAccessor dst_attributes = dst_pointcloud->attributes_for_write();
 
-  const RealizePointCloudTask &first_task = tasks.first();
-  const PointCloud &first_pointcloud = *first_task.pointcloud_info->pointcloud;
   dst_pointcloud->mat = MEM_dupalloc(first_pointcloud.mat);
   dst_pointcloud->totcol = first_pointcloud.totcol;
 
@@ -2892,7 +2896,8 @@ static void remove_id_attribute_from_instances(bke::GeometrySet &geometry_set)
   }
 }
 
-/** Propagate instances from the old geometry set to the new geometry set if they are not
+/**
+ * Propagate instances from the old geometry set to the new geometry set if they are not
  * realized.
  */
 static void propagate_instances_to_keep(const bke::GeometrySet &geometry_set,

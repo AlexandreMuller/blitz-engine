@@ -90,6 +90,21 @@ static void attr_create_motion_corner_normals(const blender::Mesh &b_mesh,
   }
 }
 
+static bool attr_need_motion_vertex_normals(const blender::Mesh &b_mesh)
+{
+  const blender::bke::GAttributeReader custom_normal = b_mesh.attributes().lookup("custom_normal");
+  return custom_normal && custom_normal.varray.type().is<blender::float3>() &&
+         custom_normal.domain == blender::bke::AttrDomain::Point;
+}
+
+static void attr_create_motion_vertex_normals(const blender::Mesh &b_mesh, packed_normal *N)
+{
+  const blender::Span<blender::float3> vert_normals = b_mesh.vert_normals();
+  for (const int i : vert_normals.index_range()) {
+    N[i] = packed_normal(make_float3(vert_normals[i][0], vert_normals[i][1], vert_normals[i][2]));
+  }
+}
+
 static void attr_create_motion_from_velocity(Mesh *mesh,
                                              const blender::Mesh &b_mesh,
                                              const blender::Span<blender::float3> b_attr,
@@ -114,6 +129,13 @@ static void attr_create_motion_from_velocity(Mesh *mesh,
     attr_cN->add_motion(mesh);
   }
 
+  Attribute *attr_N = attr_need_motion_vertex_normals(b_mesh) ?
+                          attributes.find(ATTR_STD_VERTEX_NORMAL) :
+                          nullptr;
+  if (attr_N) {
+    attr_N->add_motion(mesh);
+  }
+
   /* Only export previous and next frame, we don't have any in between data. */
   const float motion_times[2] = {-1.0f, 1.0f};
   for (int step = 1; step <= 2; step++) {
@@ -129,6 +151,9 @@ static void attr_create_motion_from_velocity(Mesh *mesh,
           reinterpret_cast<const blender::float3 *>(mP), numverts);
       attr_create_motion_corner_normals(
           b_mesh, motion_positions, attr_cN->data_for_write<packed_normal>(step));
+    }
+    if (attr_N) {
+      attr_create_motion_vertex_normals(b_mesh, attr_N->data_for_write<packed_normal>(step));
     }
   }
 }
@@ -488,24 +513,24 @@ static void attr_create_pointiness(Mesh *mesh,
   /* STEP 1: Find out duplicated vertices and point duplicates to a single
    *         original vertex.
    */
-  vector<int> sorted_vert_indeices(num_verts);
+  vector<int> sorted_vert_indices(num_verts);
   for (int vert_index = 0; vert_index < num_verts; ++vert_index) {
-    sorted_vert_indeices[vert_index] = vert_index;
+    sorted_vert_indices[vert_index] = vert_index;
   }
   const VertexAverageComparator compare(mesh->get_position(), mesh->num_verts());
-  sort(sorted_vert_indeices.begin(), sorted_vert_indeices.end(), compare);
+  sort(sorted_vert_indices.begin(), sorted_vert_indices.end(), compare);
   /* This array stores index of the original vertex for the given vertex
    * index.
    */
   vector<int> vert_orig_index(num_verts);
   for (int sorted_vert_index = 0; sorted_vert_index < num_verts; ++sorted_vert_index) {
-    const int vert_index = sorted_vert_indeices[sorted_vert_index];
+    const int vert_index = sorted_vert_indices[sorted_vert_index];
     const float3 &vert_co = mesh->get_position()[vert_index];
     bool found = false;
     for (int other_sorted_vert_index = sorted_vert_index + 1; other_sorted_vert_index < num_verts;
          ++other_sorted_vert_index)
     {
-      const int other_vert_index = sorted_vert_indeices[other_sorted_vert_index];
+      const int other_vert_index = sorted_vert_indices[other_sorted_vert_index];
       const float3 &other_vert_co = mesh->get_position()[other_vert_index];
       /* We are too far away now, we wouldn't have duplicate. */
       if ((other_vert_co.x + other_vert_co.y + other_vert_co.z) -
@@ -533,7 +558,7 @@ static void attr_create_pointiness(Mesh *mesh,
     }
     vert_orig_index[vert_index] = orig_index;
   }
-  sorted_vert_indeices.free_memory();
+  sorted_vert_indices.free_memory();
   /* STEP 2: Calculate vertex normals taking into account their possible
    *         duplicates which gets "welded" together.
    */
@@ -927,8 +952,7 @@ static void create_subd_mesh(Scene *scene,
 {
   const blender::Object *b_ob = b_ob_info.real_object;
 
-  const auto &subsurf_mod = *reinterpret_cast<const blender::SubsurfModifierData *>(
-      b_ob->modifiers.last);
+  const auto &subsurf_mod = *b_ob->modifiers.last_as<const blender::SubsurfModifierData>();
 
   const bool use_creases = (subsurf_mod.flags & blender::eSubsurfModifierFlag_UseCrease) != 0;
 

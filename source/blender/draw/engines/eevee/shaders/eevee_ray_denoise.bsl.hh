@@ -12,7 +12,7 @@
 
 #pragma once
 
-#include "draw_math_geom_lib.glsl"
+#include "draw_math_geom.bsl.hh"
 #include "draw_view.bsl.hh"
 #include "eevee_closure.bsl.hh"
 #include "eevee_colorspace_lib.bsl.hh"
@@ -23,9 +23,9 @@
 #include "eevee_sampling_lib.bsl.hh"
 #include "eevee_uniform.bsl.hh"
 #include "gpu_shader_codegen_lib.glsl"
-#include "gpu_shader_math_matrix_transform_lib.glsl"
-#include "gpu_shader_math_vector_lib.glsl"
-#include "gpu_shader_utildefines_lib.glsl"
+#include "gpu_shader_math_matrix_transform.bsl.hh"
+#include "gpu_shader_math_vector.bsl.hh"
+#include "gpu_shader_utildefines.bsl.hh"
 
 namespace eevee::raytracing::denoise {
 
@@ -67,7 +67,7 @@ struct DenoiseSpatial {
 
   [[image(6, read, RAYTRACE_TILEMASK_FORMAT)]] uimage2DArray tile_mask_img;
 
-  [[resource_table]] srt_t<TileBuffer> tiles;
+  [[resource_table]] TileBuffer tiles;
 
   /* Tag pixel radiance as invalid. */
   void invalid_pixel_write(int2 texel)
@@ -148,7 +148,7 @@ void spatial_main([[resource_table]] DenoiseSpatial &srt,
 
   const ViewMatrices view = views.get(0);
 
-  constexpr uint tile_size = RAYTRACE_GROUP_SIZE;
+  constexpr uint tile_size = uint(RAYTRACE_GROUP_SIZE);
   int2 texel_fullres = int2(local_id.xy + tile_coord * tile_size);
 
   /* Tracing resolution texel. */
@@ -409,7 +409,7 @@ struct DenoiseTemporal {
 
   [[image(6, read, RAYTRACE_TILEMASK_FORMAT)]] uimage2DArray tile_mask_img;
 
-  [[resource_table]] srt_t<TileBuffer> tiles;
+  [[resource_table]] TileBuffer tiles;
 
   LocalStatistics local_statistics_get(int2 texel, float3 center_radiance)
   {
@@ -570,7 +570,7 @@ void temporal_main([[resource_table]] DenoiseTemporal &srt,
 
   const ViewMatrices view = views.get(0);
 
-  constexpr uint tile_size = RAYTRACE_GROUP_SIZE;
+  constexpr uint tile_size = uint(RAYTRACE_GROUP_SIZE);
   int2 texel_fullres = int2(local_id.xy + tile_coord * tile_size);
   float2 uv = (float2(texel_fullres) + 0.5f) * uni.raytrace_buf.full_resolution_inv;
 
@@ -669,7 +669,7 @@ struct DenoiseBilateral {
 
   [[specialization_constant(0)]] int closure_index;
 
-  [[resource_table]] srt_t<TileBuffer> tiles;
+  [[resource_table]] TileBuffer tiles;
 };
 
 /**
@@ -694,7 +694,7 @@ void bilateral_main([[resource_table]] DenoiseBilateral &srt,
 
   const ViewMatrices view = views.get(0);
 
-  constexpr uint tile_size = RAYTRACE_GROUP_SIZE;
+  constexpr uint tile_size = uint(RAYTRACE_GROUP_SIZE);
   int2 texel_fullres = int2(local_id.xy + tile_coord * tile_size);
   float2 center_uv = (float2(texel_fullres) + 0.5f) * uni.raytrace_buf.full_resolution_inv;
 

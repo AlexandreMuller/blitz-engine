@@ -2033,6 +2033,7 @@ context_type_map = {
     "light": [("Light", False)],
     "lightprobe": [("LightProbe", False)],
     "line_style": [("FreestyleLineStyle", False)],
+    "markers": [("TimelineMarker", True)],
     "material": [("Material", False)],
     "material_slot": [("MaterialSlot", False)],
     "mesh": [("Mesh", False)],
@@ -2062,6 +2063,7 @@ context_type_map = {
     "selected_files": [("FileSelectEntry", True)],
     "selected_ids": [("ID", True)],
     "selected_nla_strips": [("NlaStrip", True)],
+    "selected_markers": [("TimelineMarker", True)],
     "selected_movieclip_tracks": [("MovieTrackingTrack", True)],
     "selected_nodes": [("Node", True)],
     "selected_objects": [("Object", True)],
@@ -2191,7 +2193,7 @@ def pycontext_members2sphinx(ident: str, fw: WriteFn, written_props: set[str]) -
                 if member_type.isidentifier():
                     class_str = ":class:`{:s}`".format(member_type)
                     if is_seq:
-                        type_strs.append("Sequence[{:s}]".format(class_str))
+                        type_strs.append("list[{:s}]".format(class_str))
                     else:
                         type_strs.append(class_str)
                 else:

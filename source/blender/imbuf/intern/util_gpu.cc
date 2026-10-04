@@ -305,7 +305,7 @@ static void get_gpu_texture_data(ImBuf *source_buffer,
     }
 
     /* Avoid excessive overhead with small updates. */
-    const bool threaded = size.x >= 1024;
+    const bool threaded = int64_t(size.x) * size.y >= 512 * 512;
 
     if (is_float) {
       IMB_scale_box(static_cast<const float *>(r_upload.data),
@@ -748,8 +748,8 @@ static void imb_gpu_texture_apply_partial_updates(ImBuf *ibuf, const bool use_pr
 
   using imbuf::partial_update::Changes;
   IMB_partial_update_flush(ibuf);
-  const int64_t new_changeset_id = IMB_partial_update_changeset_id_current();
-  const Changes changes = IMB_partial_update_collect(ibuf, ibuf->gpu.partial_update_changeset);
+  const imbuf::ChangesetID new_changeset_id = IMB_partial_update_changeset_id_current();
+  const Changes changes = IMB_partial_update_collect(ibuf, ibuf->gpu.partial_update_changeset_id);
   switch (changes.kind) {
     case Changes::Kind::Full:
     case Changes::Kind::Resized:
@@ -767,19 +767,17 @@ static void imb_gpu_texture_apply_partial_updates(ImBuf *ibuf, const bool use_pr
       }
       IMB_gpu_texture_apply_partial_update(
           ibuf->gpu.texture, ibuf, use_premult, changes, -1, int2(0), int2(0));
-      ibuf->gpu.partial_update_changeset = new_changeset_id;
+      ibuf->gpu.partial_update_changeset_id = new_changeset_id;
       break;
     case Changes::Kind::None:
-      ibuf->gpu.partial_update_changeset = new_changeset_id;
+      ibuf->gpu.partial_update_changeset_id = new_changeset_id;
       break;
   }
 }
 
 gpu::Texture *IMB_acquire_gpu_texture(const char *name,
                                       ImBuf *ibuf,
-                                      bool use_high_bitdepth,
-                                      bool use_premult,
-                                      bool limit_size,
+                                      const GPUTextureCreateFlags texture_create_flags,
                                       bool try_only)
 {
   if (ibuf == nullptr || (ibuf->byte_data() == nullptr && ibuf->float_data() == nullptr &&
@@ -790,7 +788,8 @@ gpu::Texture *IMB_acquire_gpu_texture(const char *name,
 
   std::scoped_lock lock(ibuf->gpu.mutex);
   if (ibuf->gpu.texture != nullptr) {
-    imb_gpu_texture_apply_partial_updates(ibuf, use_premult);
+    imb_gpu_texture_apply_partial_updates(
+        ibuf, flag_is_set(texture_create_flags, GPUTextureCreateFlags::Premultiplied));
     if (ibuf->gpu.texture != nullptr) {
       ibuf->gpu.lastused = BLI_time_now_seconds_i();
       GPU_texture_ref(ibuf->gpu.texture);
@@ -801,19 +800,9 @@ gpu::Texture *IMB_acquire_gpu_texture(const char *name,
     return nullptr;
   }
 
-  const int64_t changeset_id = IMB_partial_update_changeset_id_next();
+  const imbuf::ChangesetID changeset_id = IMB_partial_update_changeset_id_next();
 
-  GPUTextureCreateFlags create_flags = GPUTextureCreateFlags::EnableMipmaps;
-  if (use_high_bitdepth) {
-    create_flags |= GPUTextureCreateFlags::HighBitDepth;
-  }
-  if (use_premult) {
-    create_flags |= GPUTextureCreateFlags::Premultiplied;
-  }
-  if (limit_size) {
-    create_flags |= GPUTextureCreateFlags::LimitSize;
-  }
-  gpu::Texture *tex = IMB_create_gpu_texture(name, ibuf, create_flags);
+  gpu::Texture *tex = IMB_create_gpu_texture(name, ibuf, texture_create_flags);
   if (tex == nullptr) {
     ibuf->gpu.flag |= IMB_GPU_LOAD_FAILED;
     ibuf->gpu.lastused = BLI_time_now_seconds_i();
@@ -824,7 +813,7 @@ gpu::Texture *IMB_acquire_gpu_texture(const char *name,
   GPU_texture_update_mipmap_chain(tex);
   imb_gpu_texture_default_init_mipmap(tex);
 
-  ibuf->gpu.partial_update_changeset = changeset_id;
+  ibuf->gpu.partial_update_changeset_id = changeset_id;
   ibuf->gpu.texture = tex;
   ibuf->gpu.lastused = BLI_time_now_seconds_i();
   GPU_texture_ref(tex);
@@ -852,6 +841,7 @@ void IMB_free_gpu_textures(ImBuf *ibuf)
     ibuf->gpu.texture = nullptr;
   }
   ibuf->gpu.flag &= ~IMB_GPU_LOAD_FAILED;
+  ibuf->gpu.partial_update_changeset_id = -1;
 }
 
 void IMB_assign_gpu_texture(ImBuf *ibuf, gpu::Texture *texture)
@@ -866,7 +856,7 @@ void IMB_assign_gpu_texture(ImBuf *ibuf, gpu::Texture *texture)
     ibuf->gpu.texture = nullptr;
   }
   ibuf->gpu.flag &= ~IMB_GPU_LOAD_FAILED;
-  ibuf->gpu.partial_update_changeset = IMB_partial_update_changeset_id_current();
+  ibuf->gpu.partial_update_changeset_id = texture ? IMB_partial_update_changeset_id_next() : -1;
   ibuf->gpu.texture = texture;
 }
 

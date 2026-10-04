@@ -34,6 +34,10 @@ namespace imbuf::partial_update {
 struct Tracker;
 }
 
+namespace imbuf {
+using ChangesetID = int64_t;
+}
+
 namespace ocio {
 class ColorSpace;
 }
@@ -123,8 +127,10 @@ struct ImBufFloatBuffer {
 };
 
 enum ImBufGPUFlag : int {
-  /** GPU texture failed to be loaded onto the GPU, to distinguish a null
-   * texture between not yet loaded and failed to load. */
+  /**
+   * GPU texture failed to be loaded onto the GPU, to distinguish a null
+   * texture between not yet loaded and failed to load.
+   */
   IMB_GPU_LOAD_FAILED = (1 << 0),
 };
 ENUM_OPERATORS(ImBufGPUFlag)
@@ -150,7 +156,7 @@ struct ImBufGPU {
   ImBufGPUFlag flag = ImBufGPUFlag(0);
 
   /** Changeset tracking for partial update. */
-  std::atomic<int64_t> partial_update_changeset = -1;
+  std::atomic<imbuf::ChangesetID> partial_update_changeset_id = -1;
 
   /** Mutex guarding access to #texture, #lastused, and #flag. */
   blender::Mutex mutex;
@@ -231,6 +237,11 @@ struct ImBuf {
   imbuf::partial_update::Tracker *partial_update = nullptr;
   Mutex partial_update_mutex;
 
+  /** Unique changeset ID of the last full update, to track when the undo
+   * system needs to assume the whole image buffer has changed and no partial
+   * undo is possible. */
+  std::atomic<imbuf::ChangesetID> full_update_changeset_id = -1;
+
   /** Resolution in pixels per meter. Multiply by `0.0254` for DPI. */
   double ppm[2] = {0.0, 0.0};
 
@@ -281,6 +292,9 @@ struct ImBuf {
 
   [[nodiscard]] bool colorspace_is_data() const;
 
+  [[nodiscard]] const ColorSpace &byte_colorspace() const;
+  [[nodiscard]] const ColorSpace &float_colorspace() const;
+
   [[nodiscard]] bool can_contain_alpha() const
   {
     return color_mode == ImColorMode::RGBA || color_mode == ImColorMode::BW_A;
@@ -317,8 +331,10 @@ enum {
   IB_BITMAPDIRTY = (1 << 1),
   /** image buffer is persistent in the memory and should never be removed from the cache */
   IB_PERSISTENT = (1 << 2),
-  /** The image buffer is backed by a GPU texture storage but the host buffers either do not exist
-   * or are out-dated and needs to read from the GPU texture. */
+  /**
+   * The image buffer is backed by a GPU texture storage but the host buffers either do not exist
+   * or are out-dated and needs to read from the GPU texture.
+   */
   IB_HOST_BUFFER_INVALID = (1 << 3),
 };
 

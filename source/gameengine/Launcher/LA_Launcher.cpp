@@ -50,6 +50,7 @@
 #include "KX_PythonMain.h"
 #include "LA_System.h"
 #include "LA_SystemCommandLine.h"
+#include "MEM_guardedalloc.h"
 
 #ifdef WITH_PYTHON
 #  include "Texture.h"  // For FreeAllTextures.
@@ -71,7 +72,6 @@ LA_Launcher::LA_Launcher(GHOST_ISystem *system,
                          blender::Main *maggie,
                          blender::Scene *scene,
                          GlobalSettings *gs,
-                         RAS_Rasterizer::StereoMode stereoMode,
                          int samples,
                          int argc,
                          char **argv,
@@ -100,7 +100,6 @@ LA_Launcher::LA_Launcher(GHOST_ISystem *system,
       m_gameLogic(nullptr),
 #endif  // WITH_PYTHON
       m_samples(samples),
-      m_stereoMode(stereoMode),
       m_argc(argc),
       m_argv(argv),
       m_audioDeviceIsInitialized(false)
@@ -174,10 +173,6 @@ void LA_Launcher::InitEngine()
                                   (profile ? KX_KetsjiEngine::SHOW_PROFILE : 0));
 
   m_rasterizer = new RAS_Rasterizer();
-
-  // Stereo parameters - Eye Separation from the UI - stereomode from the command-line/UI
-  m_rasterizer->SetStereoMode(m_stereoMode);
-  m_rasterizer->SetEyeSeparation(m_startScene->gm.eyeseparation);
 
   // Create the canvas, rasterizer and rendertools.
   m_canvas = CreateCanvas();
@@ -550,7 +545,6 @@ void LA_Launcher::EngineMainLoop()
   if (GetPythonMainLoopCode(pythonCode, pythonFileName)) {
     // Set python environement variable.
     KX_SetActiveScene(m_kxStartScene);
-    m_kxStartScene->SetIsPythonMainLoop(true);
 
     pynextframestate.state = this;
     pynextframestate.func = &PythonEngineNextFrame;
@@ -558,6 +552,8 @@ void LA_Launcher::EngineMainLoop()
     CM_Debug("Yielding control to Python script '" << pythonFileName << "'...");
     RunPythonMainLoop(pythonCode);
     CM_Debug("Exit Python script '" << pythonFileName << "'");
+
+    MEM_delete(pythonCode.data()); // Previously allocated with MEM_new_array_uninitialized
   }
   else {
     pynextframestate.state = nullptr;

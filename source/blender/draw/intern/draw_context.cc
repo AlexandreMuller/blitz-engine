@@ -81,6 +81,7 @@
 #include "UI_view2d.hh"
 
 #include "WM_api.hh"
+#include "WM_toolsystem.hh"
 
 #include "DRW_render.hh"
 
@@ -177,6 +178,10 @@ DRWContext::DRWContext(Mode mode_,
   }
   else {
     this->object_pose = nullptr;
+  }
+
+  if (C != nullptr) {
+    this->active_tool = WM_toolsystem_ref_from_context(C);
   }
 
   /* View layer can be lazily synced. */
@@ -413,6 +418,7 @@ void DRWData::modules_init()
 {
   using namespace blender::draw;
   DRW_pointcloud_init(this);
+  DRW_gsplat_init(this);
   DRW_curves_init(this);
   DRW_volume_init(this);
 }
@@ -422,6 +428,7 @@ void DRWData::modules_begin_sync()
   using namespace blender::draw;
   DRW_curves_begin_sync(this);
   DRW_smoke_begin_sync(this);
+  DRW_gsplat_begin_sync();
 }
 
 void DRWData::modules_exit()
@@ -436,6 +443,7 @@ void DRW_viewport_data_free(DRWData *drw_data)
   }
   DRW_volume_module_free(drw_data->volume_module);
   DRW_pointcloud_module_free(drw_data->pointcloud_module);
+  DRW_gsplat_module_free(drw_data->gsplat_module);
   DRW_curves_module_free(drw_data->curves_module);
   delete drw_data->default_view;
 
@@ -923,6 +931,107 @@ bool is_object_instancer(const Object &ob)
 {
   return (ob.transflag & OB_DUPLI) || (ob.runtime->geometry_set_eval != nullptr);
 }
+
+/**
+ * This shared function decides which objects are displayed/selectable.
+ * As the logic involved here is fairly involved, avoid the checks between
+ * drawing and selection diverging.
+ *
+ * The `check_select` argument applies some additional checks,
+ * since there are times when an object may be drawn but not selectable,
+ * however the reverse should never occur (hidden but selectable).
+ *
+ * This function should only be accessed via wrapper functions:
+ *
+ * - #draw_filter_from_viewport_object_for_draw
+ * - #draw_filter_from_viewport_object_for_select
+ *
+ * \param has_duplis: See #foreach_obref_in_scene `should_draw_object_cb` callback.
+ * \param object_filter_fn: Optional caller filter (may be null).
+ * \param check_select: Also apply the selection checks (type exclusion & select-ability).
+ */
+DrawFilter draw_filter_from_viewport_object_impl(const DRWContext &draw_ctx,
+                                                 Object &ob,
+                                                 const bool has_duplis,
+                                                 const DRW_ObjectFilterFn object_filter_fn,
+                                                 void *object_filter_user_data,
+                                                 const bool check_select)
+{
+  const View3D &v3d = *draw_ctx.v3d;
+
+  /* Checks on top-level objects, for an instancer these also apply to its duplis.
+   * Duplis reach this predicate only to check draw-ability;
+   * these checks were already done on their instancer during the top-level iteration. */
+  if ((ob.base_flag & BASE_FROM_DUPLI) == 0) {
+    /* For an instancer that may spawn duplis these checks control instance generation,
+     * so run them before the visibility / selectable checks. */
+    const bool filter_can_exclude_duplis = is_object_instancer(ob) && has_duplis;
+    const DrawFilter skip = filter_can_exclude_duplis ? DrawFilter::SkipRecursive :
+                                                        DrawFilter::Skip;
+
+    /* Take into account viewport settings for object type visibility on an instancer that may
+     * spawn duplis. The exclusion applies to its instances too, see: #159219.
+     *
+     * Duplis are skipped here on purpose: viewport exclusion is handled by
+     * #BKE_object_is_visible_in_viewport below, selection exclusion uses the instancer's
+     * type since selecting a dupli selects its instancer (they share a `select_id`). */
+    int object_type_exclude = v3d.object_type_exclude_viewport;
+
+    /* Selection also honors viewport exclusion so hidden instances can't occlude or be picked. */
+    if (check_select) {
+      object_type_exclude |= v3d.object_type_exclude_select;
+    }
+    if ((object_type_exclude & (1 << ob.type)) != 0) {
+      return skip;
+    }
+
+    if (object_filter_fn != nullptr) {
+      if (object_filter_fn(&ob, object_filter_user_data) == false) {
+        return skip;
+      }
+    }
+  }
+
+  /* Checks which only skip the object itself (never its duplis),
+   * a dupli may be visible & selectable when its instancer is not. */
+  if (!BKE_object_is_visible_in_viewport(&v3d, &ob)) {
+    return DrawFilter::Skip;
+  }
+
+  if (check_select) {
+    /* When selecting pose-bones in pose mode, check for visibility not select-ability
+     * as pose-bones have their own selection restriction flag. */
+    if ((draw_ctx.object_pose != nullptr) && (ob.mode & OB_MODE_POSE)) {
+      if ((ob.base_flag & BASE_ENABLED_AND_VISIBLE_IN_DEFAULT_VIEWPORT) == 0) {
+        return DrawFilter::Skip;
+      }
+    }
+    else if ((ob.base_flag & BASE_SELECTABLE) == 0) {
+      return DrawFilter::Skip;
+    }
+  }
+
+  return DrawFilter::Draw;
+}
+
+/** Predicate for the viewport draw loop, see #draw_filter_from_viewport_object_impl. */
+DrawFilter draw_filter_from_viewport_object_for_draw(const DRWContext &draw_ctx,
+                                                     Object &ob,
+                                                     const bool has_duplis)
+{
+  return draw_filter_from_viewport_object_impl(draw_ctx, ob, has_duplis, nullptr, nullptr, false);
+}
+
+/** Predicate for the selection loop, see #draw_filter_from_viewport_object_impl. */
+DrawFilter draw_filter_from_viewport_object_for_select(const DRWContext &draw_ctx,
+                                                       Object &ob,
+                                                       const bool has_duplis,
+                                                       const DRW_ObjectFilterFn object_filter_fn,
+                                                       void *object_filter_user_data)
+{
+  return draw_filter_from_viewport_object_impl(
+      draw_ctx, ob, has_duplis, object_filter_fn, object_filter_user_data, true);
+}
 }  // namespace
 
 /**
@@ -1125,9 +1234,7 @@ void DRW_cache_free_old_batches(Main *bmain)
 
   lasttime = ctime;
 
-  for (scene = static_cast<Scene *>(bmain->scenes.first); scene;
-       scene = static_cast<Scene *>(scene->id.next))
-  {
+  for (scene = bmain->scenes.first(); scene; scene = static_cast<Scene *>(scene->id.next)) {
     for (ViewLayer &view_layer : scene->view_layers) {
       Depsgraph *depsgraph = BKE_scene_get_depsgraph(scene, &view_layer);
       if (depsgraph == nullptr) {
@@ -1239,7 +1346,9 @@ static void drw_render_border_mask(const DRWContext &ctx)
   const RegionView3D *rv3d = ctx.rv3d;
 
   /* Check if we need to do any render border masking. */
-  if (v3d == nullptr || rv3d == nullptr || rv3d->persp != RV3D_CAMOB || rv3d->camroll == 0.0f) {
+  if (v3d == nullptr || rv3d == nullptr || rv3d->persp != RV3D_CAMOB || v3d->camera == nullptr ||
+      rv3d->camroll == 0.0f)
+  {
     return;
   }
 
@@ -1263,9 +1372,14 @@ static void drw_render_border_mask(const DRWContext &ctx)
     return;
   }
 
+  float roll_angle = rv3d->camroll;
+  if ((rv3d->rflag & RV3D_FLIP_X) != 0) {
+    roll_angle = -roll_angle;
+  }
+
   /* Compute corners of the render border. */
   const float2 pivot = ctx.size * 0.5f;
-  const float2x2 roll = math::from_rotation<float2x2>(math::AngleRadian(rv3d->camroll));
+  const float2x2 roll = math::from_rotation<float2x2>(math::AngleRadian(roll_angle));
   const float2 corner[4] = {
       pivot + roll * (float2(unrolled_border.xmin, unrolled_border.ymin) - pivot),
       pivot + roll * (float2(unrolled_border.xmax, unrolled_border.ymin) - pivot),
@@ -1678,7 +1792,6 @@ static bool gpencil_any_exists(Depsgraph *depsgraph)
 /** \} */
 
 /* -------------------------------------------------------------------- */
-
 /** \name Callbacks
  * \{ */
 
@@ -1774,48 +1887,50 @@ static void drw_callbacks_post_scene_view3d(DRWContext &draw_ctx)
   GPU_matrix_set(rv3d->viewmat);
   /**************************/
 
-  GPU_depth_test(GPU_DEPTH_NONE);
-  /* Apply state for callbacks. */
-  GPU_apply_state();
+  if (draw_ctx.evil_C) {
+    GPU_depth_test(GPU_DEPTH_NONE);
+    /* Apply state for callbacks. */
+    GPU_apply_state();
 
-  ED_region_draw_cb_draw(draw_ctx.evil_C, draw_ctx.region, REGION_DRAW_POST_VIEW);
+    ED_region_draw_cb_draw(draw_ctx.evil_C, draw_ctx.region, REGION_DRAW_POST_VIEW);
 
-  /* View3D XR mirror view. */
+    /* View3D XR mirror view. */
 #ifdef WITH_XR_OPENXR
-  if ((v3d->flag & V3D_XR_SESSION_MIRROR) != 0) {
-    drw_callbacks_xr(draw_ctx, REGION_DRAW_POST_VIEW);
-  }
+    if ((v3d->flag & V3D_XR_SESSION_MIRROR) != 0) {
+      drw_callbacks_xr(draw_ctx, REGION_DRAW_POST_VIEW);
+    }
 #endif
 
-  /* Callback can be nasty and do whatever they want with the state.
-   * Don't trust them! */
-  draw::command::StateSet::set();
+    /* Callback can be nasty and do whatever they want with the state.
+     * Don't trust them! */
+    draw::command::StateSet::set();
 
-  /* Needed so gizmo isn't occluded. */
-  if ((v3d->gizmo_flag & V3D_GIZMO_HIDE) == 0) {
+    /* Needed so gizmo isn't occluded. */
+    if ((v3d->gizmo_flag & V3D_GIZMO_HIDE) == 0) {
+      GPU_depth_test(GPU_DEPTH_NONE);
+      DRW_draw_gizmo_3d(draw_ctx.evil_C, region);
+    }
+
     GPU_depth_test(GPU_DEPTH_NONE);
-    DRW_draw_gizmo_3d(draw_ctx.evil_C, region);
+    DRW_draw_region_info(draw_ctx.evil_C, region);
+
+    /* Annotations - temporary drawing buffer (screen-space). */
+    /* XXX: Or should we use a proper draw/overlay engine for this case? */
+    if (((v3d->flag2 & V3D_HIDE_OVERLAYS) == 0) && (do_annotations)) {
+      GPU_depth_test(GPU_DEPTH_NONE);
+      /* XXX: as `scene->gpd` is not copied for copy-on-eval yet */
+      ED_annotation_draw_view3d(DEG_get_input_scene(depsgraph), depsgraph, v3d, region, false);
+    }
+
+    if ((v3d->gizmo_flag & V3D_GIZMO_HIDE) == 0) {
+      /* Draw 2D after region info so we can draw on top of the camera passepartout overlay.
+       * 'DRW_draw_region_info' sets the projection in pixel-space. */
+      GPU_depth_test(GPU_DEPTH_NONE);
+      DRW_draw_gizmo_2d(draw_ctx.evil_C, region);
+    }
+
+    GPU_depth_test(GPU_DEPTH_LESS_EQUAL);
   }
-
-  GPU_depth_test(GPU_DEPTH_NONE);
-  DRW_draw_region_info(draw_ctx.evil_C, region);
-
-  /* Annotations - temporary drawing buffer (screen-space). */
-  /* XXX: Or should we use a proper draw/overlay engine for this case? */
-  if (((v3d->flag2 & V3D_HIDE_OVERLAYS) == 0) && (do_annotations)) {
-    GPU_depth_test(GPU_DEPTH_NONE);
-    /* XXX: as `scene->gpd` is not copied for copy-on-eval yet */
-    ED_annotation_draw_view3d(DEG_get_input_scene(depsgraph), depsgraph, v3d, region, false);
-  }
-
-  if ((v3d->gizmo_flag & V3D_GIZMO_HIDE) == 0) {
-    /* Draw 2D after region info so we can draw on top of the camera passepartout overlay.
-     * 'DRW_draw_region_info' sets the projection in pixel-space. */
-    GPU_depth_test(GPU_DEPTH_NONE);
-    DRW_draw_gizmo_2d(draw_ctx.evil_C, region);
-  }
-
-  GPU_depth_test(GPU_DEPTH_LESS_EQUAL);
 }
 
 #ifdef WITH_XR_OPENXR
@@ -1859,9 +1974,6 @@ static void drw_callbacks_post_scene_xr_surface(DRWContext &draw_ctx)
 
 static void drw_callbacks_post_scene(DRWContext &draw_ctx)
 {
-  if (draw_ctx.evil_C == nullptr) {
-    return;
-  }
 
   /* State has been reset at the end `draw_ctx.engines_draw_scene()`. */
   DRW_submission_start();
@@ -2004,8 +2116,8 @@ static void drw_draw_render_loop_3d(DRWContext &draw_ctx, RenderEngineType *engi
   const bool do_populate_loop = internal_engine || overlays_on || !draw_type_render ||
                                 gpencil_engine_needed;
 
-  auto should_draw_object = [&](Object &ob, bool /*has_duplis*/) -> DrawFilter {
-    return BKE_object_is_visible_in_viewport(v3d, &ob) ? DrawFilter::Draw : DrawFilter::Skip;
+  auto should_draw_object = [&](Object &ob, const bool has_duplis) -> DrawFilter {
+    return draw_filter_from_viewport_object_for_draw(draw_ctx, ob, has_duplis);
   };
 
   draw_ctx.enable_engines(gpencil_engine_needed, engine_type);
@@ -2251,8 +2363,7 @@ void DRW_render_gpencil(RenderEngine *engine, Depsgraph *depsgraph)
     BLI_rcti_init(&render_rect, 0, draw_ctx.size[0], 0, draw_ctx.size[1]);
   }
 
-  for (RenderView *render_view = static_cast<RenderView *>(render_result->views.first);
-       render_view != nullptr;
+  for (RenderView *render_view = render_result->views.first(); render_view != nullptr;
        render_view = render_view->next)
   {
     RE_SetActiveRenderView(render, render_view->name);
@@ -2317,9 +2428,8 @@ void DRW_render_to_image(
                                                        draw_ctx.size[1],
                                                        view_layer->name,
                                                        /*RR_ALL_VIEWS*/ nullptr);
-  RenderLayer *render_layer = static_cast<RenderLayer *>(render_result->layers.first);
-  for (RenderView *render_view = static_cast<RenderView *>(render_result->views.first);
-       render_view != nullptr;
+  RenderLayer *render_layer = render_result->layers.first();
+  for (RenderView *render_view = render_result->views.first(); render_view != nullptr;
        render_view = render_view->next)
   {
     RE_SetActiveRenderView(render, render_view->name);
@@ -2349,14 +2459,18 @@ void DRW_render_object_iter(
   using namespace blender::draw;
 
   DRWContext &draw_ctx = drw_get();
-  View3D *v3d = draw_ctx.v3d;
 
-  auto should_draw_object = [&](Object &ob, bool /*has_duplis*/) -> DrawFilter {
-    if (v3d && !BKE_object_is_visible_in_viewport(v3d, &ob)) {
-      return DrawFilter::Skip;
-    }
+  /* Without a viewport there are no viewport settings to hide objects, draw everything. */
+  auto should_draw_object_all = [](Object & /*ob*/, const bool /*has_duplis*/) -> DrawFilter {
     return DrawFilter::Draw;
   };
+  auto should_draw_object_viewport = [&](Object &ob, const bool has_duplis) -> DrawFilter {
+    return draw_filter_from_viewport_object_for_draw(draw_ctx, ob, has_duplis);
+  };
+  FunctionRef<DrawFilter(Object &, bool)> should_draw_object = should_draw_object_viewport;
+  if (draw_ctx.v3d == nullptr) {
+    should_draw_object = should_draw_object_all;
+  }
 
   draw_ctx.sync([&](DupliCacheManager &duplis, ExtractionGraph &extraction) {
     foreach_obref_in_scene(draw_ctx, should_draw_object, [&](ObjectRef &ob_ref) {
@@ -2471,49 +2585,9 @@ void DRW_draw_select_loop(Depsgraph *depsgraph,
   draw_ctx.enable_engines(use_gpencil);
   draw_ctx.engines_data_validate();
   draw_ctx.engines_init_and_sync([&](DupliCacheManager &duplis, ExtractionGraph &extraction) {
-    /* When selecting pose-bones in pose mode, check for visibility not select-ability
-     * as pose-bones have their own selection restriction flag. */
-    const bool use_pose_exception = (draw_ctx.object_pose != nullptr);
-
-    const int object_type_exclude_select = v3d->object_type_exclude_select;
-
     auto should_draw_object = [&](Object &ob, const bool has_duplis) -> DrawFilter {
-      const bool is_dupli = (ob.base_flag & BASE_FROM_DUPLI) != 0;
-      const bool is_instancer = !is_dupli && is_object_instancer(ob);
-      /* Duplis reach this predicate only to check draw-ability;
-       * the filter was already checked on their instancer during the top-level iteration. */
-      const bool use_object_filter = !is_dupli && object_filter_fn != nullptr &&
-                                     (object_type_exclude_select & (1 << ob.type)) == 0;
-      /* For an instancer that may spawn duplis the filter controls instance generation,
-       * so check it before the visibility / selectable checks.
-       * Otherwise it only affects self-draw and runs after those checks. */
-      const bool filter_can_exclude_duplis = is_instancer && has_duplis;
-
-      if (use_object_filter && filter_can_exclude_duplis) {
-        if (object_filter_fn(&ob, object_filter_user_data) == false) {
-          return DrawFilter::SkipRecursive;
-        }
-      }
-
-      if (!BKE_object_is_visible_in_viewport(v3d, &ob)) {
-        return DrawFilter::Skip;
-      }
-      if (use_pose_exception && (ob.mode & OB_MODE_POSE)) {
-        if ((ob.base_flag & BASE_ENABLED_AND_VISIBLE_IN_DEFAULT_VIEWPORT) == 0) {
-          return DrawFilter::Skip;
-        }
-      }
-      else if ((ob.base_flag & BASE_SELECTABLE) == 0) {
-        return DrawFilter::Skip;
-      }
-
-      if (use_object_filter && !filter_can_exclude_duplis) {
-        if (object_filter_fn(&ob, object_filter_user_data) == false) {
-          return DrawFilter::Skip;
-        }
-      }
-
-      return DrawFilter::Draw;
+      return draw_filter_from_viewport_object_for_select(
+          draw_ctx, ob, has_duplis, object_filter_fn, object_filter_user_data);
     };
 
     foreach_obref_in_scene(draw_ctx, should_draw_object, [&](ObjectRef &ob_ref) {
@@ -2571,9 +2645,12 @@ void DRW_draw_depth_loop(Depsgraph *depsgraph,
   draw_ctx.acquire_data();
   draw_ctx.enable_engines(use_gpencil);
   draw_ctx.engines_init_and_sync([&](DupliCacheManager &duplis, ExtractionGraph &extraction) {
-    auto should_draw_object = [&](Object &ob, bool /*has_duplis*/) -> DrawFilter {
-      if (!BKE_object_is_visible_in_viewport(v3d, &ob)) {
-        return DrawFilter::Skip;
+    auto should_draw_object = [&](Object &ob, const bool has_duplis) -> DrawFilter {
+      if (const DrawFilter filter = draw_filter_from_viewport_object_for_draw(
+              draw_ctx, ob, has_duplis);
+          filter != DrawFilter::Draw)
+      {
+        return filter;
       }
       if (use_only_selected && !(ob.base_flag & BASE_SELECTED)) {
         return DrawFilter::Skip;
@@ -2639,7 +2716,16 @@ void DRW_draw_select_id(Depsgraph *depsgraph, ARegion *region, View3D *v3d)
     }
 
     if (RETOPOLOGY_ENABLED(v3d) && !XRAY_ENABLED(v3d)) {
-      auto should_draw_object = [&](Object &ob, bool /*has_duplis*/) -> DrawFilter {
+      auto should_draw_object = [&](Object &ob, const bool has_duplis) -> DrawFilter {
+        /* Check visibility first so an excluded instancer skips its duplis,
+         * the type check below would otherwise reject a non-mesh instancer (an empty)
+         * before the exclusion could be applied to its duplis. */
+        if (const DrawFilter filter = draw_filter_from_viewport_object_for_draw(
+                draw_ctx, ob, has_duplis);
+            filter != DrawFilter::Draw)
+        {
+          return filter;
+        }
         if (ob.type != OB_MESH) {
           /* The iterator has evaluated meshes for all solid objects.
            * It also has non-mesh objects however, which are not supported here. */
@@ -2647,9 +2733,6 @@ void DRW_draw_select_id(Depsgraph *depsgraph, ARegion *region, View3D *v3d)
         }
         if (DRW_object_is_in_edit_mode(&ob)) {
           /* Only background (non-edit) objects are used for occlusion. */
-          return DrawFilter::Skip;
-        }
-        if (!BKE_object_is_visible_in_viewport(v3d, &ob)) {
           return DrawFilter::Skip;
         }
         return DrawFilter::Draw;
@@ -2779,6 +2862,9 @@ void DRW_module_init()
 
   BKE_pointcloud_batch_cache_dirty_tag_cb = DRW_pointcloud_batch_cache_dirty_tag;
   BKE_pointcloud_batch_cache_free_cb = DRW_pointcloud_batch_cache_free;
+
+  BKE_gsplat_batch_cache_dirty_tag_cb = DRW_gsplat_batch_cache_dirty_tag;
+  BKE_gsplat_batch_cache_free_cb = DRW_gsplat_batch_cache_free;
 
   BKE_volume_batch_cache_dirty_tag_cb = DRW_volume_batch_cache_dirty_tag;
   BKE_volume_batch_cache_free_cb = DRW_volume_batch_cache_free;

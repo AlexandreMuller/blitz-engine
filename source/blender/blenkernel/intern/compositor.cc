@@ -2,6 +2,10 @@
  *
  * SPDX-License-Identifier: GPL-2.0-or-later */
 
+/** \file
+ * \ingroup bke
+ */
+
 #include <limits>
 #include <string>
 
@@ -35,6 +39,7 @@
 #include "BKE_anim_data.hh"
 #include "BKE_animsys.hh"
 #include "BKE_compositor.hh"
+#include "BKE_compute_context_cache.hh"
 #include "BKE_compute_contexts.hh"
 #include "BKE_context.hh"
 #include "BKE_cryptomatte.hh"
@@ -45,9 +50,11 @@
 #include "BKE_node.hh"
 #include "BKE_node_legacy_types.hh"
 #include "BKE_node_runtime.hh"
+#include "BKE_node_tree_zones.hh"
 
 #include "DEG_depsgraph.hh"
 #include "DEG_depsgraph_build.hh"
+#include "DEG_depsgraph_query.hh"
 
 #include "WM_api.hh"
 
@@ -66,10 +73,17 @@ Cache::~Cache()
   this->clear_frames();
 }
 
-const ImBuf *Cache::get_frame(const int frame_number, const int view_identifier)
+ImBuf *Cache::get_frame(const int frame_number, const int view_identifier)
 {
   std::scoped_lock lock{frames_mutex_};
-  return this->frames_.lookup_try(FrameKey(frame_number, view_identifier)).value_or(nullptr);
+  const FrameKey key = FrameKey(frame_number, view_identifier);
+  ImBuf *cached_frame = this->frames_.lookup_try(key).value_or(nullptr);
+  if (!cached_frame) {
+    return nullptr;
+  }
+
+  IMB_refImBuf(cached_frame);
+  return cached_frame;
 }
 
 void Cache::add_frame(const int frame_number, const int view_identifier, ImBuf *image_buffer)
@@ -96,7 +110,7 @@ void Cache::clear_frames()
   this->frames_.clear();
 }
 
-Vector<IndexRange> Cache::compute_frame_ranges()
+Vector<Cache::FrameRange> Cache::compute_frame_ranges()
 {
   /* Compute a sorted vector of all cached frames. */
   VectorSet<int> frame_numbers_set;
@@ -110,18 +124,17 @@ Vector<IndexRange> Cache::compute_frame_ranges()
   Vector<int> frame_numbers = frame_numbers_set.extract_vector();
   std::ranges::sort(frame_numbers);
 
-  Vector<IndexRange> frame_ranges;
+  Vector<FrameRange> frame_ranges;
   for (const int frame : frame_numbers) {
     /* We start a new range by appending a singleton range of the current frame, either because
      * this is the first range or because the last range will not be contiguous with the current
      * frame. */
-    if (frame_ranges.is_empty() || frame - frame_ranges.last().last() > 1) {
-      frame_ranges.append(IndexRange(frame, 1));
+    if (frame_ranges.is_empty() || frame - frame_ranges.last().end > 1) {
+      frame_ranges.append(FrameRange(frame, frame));
     }
     else {
       /* Otherwise, the frame is contiguous with the last range, so we just grow its size by 1. */
-      frame_ranges.last() = IndexRange(frame_ranges.last().start(),
-                                       frame_ranges.last().size() + 1);
+      frame_ranges.last().end++;
     }
   }
 
@@ -203,7 +216,8 @@ SceneCompositorEffect *get_active_effect(const Scene &scene)
 
 bool is_effect_enabled(const SceneCompositorEffect &effect, const ExecutionMode mode)
 {
-  if (!effect.node_group || ID_MISSING(effect.node_group)) {
+  const bNodeTree *original_node_group = DEG_get_original(effect.node_group);
+  if (!original_node_group || ID_MISSING(original_node_group)) {
     return false;
   }
 
@@ -237,7 +251,7 @@ void rename_effect(Scene &scene,
   new_name.copy_utf8_truncated(effect.name);
   BLI_uniquename(&scene.compositor_effects,
                  &effect,
-                 CTX_DATA_(BLT_I18NCONTEXT_ID_SCENE, "Compositor Effect"),
+                 CTX_DATA_(BLT_I18NCONTEXT_ID_SCENE, "Scene Effect"),
                  '.',
                  offsetof(SceneCompositorEffect, name),
                  sizeof(effect.name));
@@ -605,7 +619,7 @@ bool is_viewport_compositor_used(const bContext &context)
   for (const wmWindow &window : window_manager->windows) {
     const bScreen *screen = WM_window_get_active_screen(&window);
     for (const ScrArea &area : screen->areabase) {
-      const SpaceLink &space = *static_cast<const SpaceLink *>(area.spacedata.first);
+      const SpaceLink &space = *area.spacedata.first();
       if (space.spacetype == SPACE_VIEW3D) {
         const View3D &view_3d = reinterpret_cast<const View3D &>(space);
         for (ARegion &region : area.regionbase) {
@@ -707,36 +721,83 @@ void add_depsgraph_relations(Scene &scene,
  * Compute Contexts.
  */
 
+const ComputeContext &get_zone_viewer_compute_context(
+    const bNode &node,
+    const bke::bNodeTreeZone *zone,
+    const ComputeContext &compute_context,
+    bke::ComputeContextCache &compute_context_cache)
+{
+  const ComputeContext *current_context = &compute_context;
+  const bke::bNodeTreeZones *zones = node.owner_tree().zones();
+  if (!zones) {
+    return *current_context;
+  }
+  const bke::bNodeTreeZone *node_zone = zones->get_zone_by_node(node.identifier);
+  Vector<const bke::bNodeTreeZone *> zone_stack = zones->get_zones_to_enter(zone, node_zone);
+
+  for (const bke::bNodeTreeZone *current_zone : zone_stack) {
+    const bNode &output_node = *current_zone->output_node();
+    if (output_node.is_type("GeometryNodeRepeatOutput"_ustr)) {
+      const auto *repeat_storage = static_cast<NodeGeometryRepeatOutput *>(output_node.storage);
+      const int inspection_index = repeat_storage->inspection_index;
+      current_context = &compute_context_cache.for_repeat_zone(
+          current_context, *current_zone->output_node(), inspection_index);
+    }
+    else {
+      BLI_assert_unreachable();
+    }
+  }
+
+  return *current_context;
+}
+
 /* Recursively search node groups to find the node group whose instance key matches the given
- * active node group instance key, and returns it compute context hash. */
-static std::optional<ComputeContextHash> compute_active_compute_context_hash_recursive(
+ * active node group instance key, and return the hash of the compute context of the viewer node
+ * that lies inside it. Returns a nullopt if no active viewer node exists inside the node group. */
+static std::optional<ComputeContextHash> compute_viewer_compute_context_hash_recursive(
     const bNodeTree &node_group,
     const ComputeContext &compute_context,
     const bNodeInstanceKey instance_key,
-    const bNodeInstanceKey active_node_group_instance_key)
+    const bNodeInstanceKey active_node_group_instance_key,
+    bke::ComputeContextCache &compute_context_cache)
 {
-  /* If this is the active node group, returns it hash.  */
+  node_group.ensure_topology_cache();
+
+  /* If this is the active node group, returns the hash of the compute context of the active viewer
+   * node that inside it. */
   if (active_node_group_instance_key == instance_key) {
-    return compute_context.hash();
+    for (const bNode *node : node_group.nodes_by_type("CompositorNodeViewer"_ustr)) {
+      if (node->flag & NODE_DO_OUTPUT && !node->is_muted()) {
+        const ComputeContext &zone_viewer_compute_context = get_zone_viewer_compute_context(
+            *node, nullptr, compute_context, compute_context_cache);
+        return zone_viewer_compute_context.hash();
+      }
+    }
+    return std::nullopt;
   }
 
   /* Otherwise, we have to check node groups recursively. */
-  node_group.ensure_topology_cache();
   for (const bNode *group_node : node_group.group_nodes()) {
-    if (!group_node->id || ID_MISSING(group_node->id)) {
+    const ID *original_node_group = DEG_get_original(group_node->id);
+    if (group_node->is_muted() || !original_node_group || ID_MISSING(original_node_group)) {
       continue;
     }
+
+    const ComputeContext &zone_compute_context = get_zone_viewer_compute_context(
+        *group_node, nullptr, compute_context, compute_context_cache);
 
     const bNodeTree &child_node_group = *id_cast<const bNodeTree *>(group_node->id);
     const bNodeInstanceKey child_instance_key = bke::node_instance_key(
         instance_key, &node_group, group_node);
-    const bke::GroupNodeComputeContext child_compute_context(
-        &compute_context, group_node->identifier, &group_node->owner_tree());
-    std::optional<ComputeContextHash> hash = compute_active_compute_context_hash_recursive(
+    const bke::GroupNodeComputeContext &child_compute_context =
+        compute_context_cache.for_group_node(
+            &zone_compute_context, group_node->identifier, &group_node->owner_tree());
+    std::optional<ComputeContextHash> hash = compute_viewer_compute_context_hash_recursive(
         child_node_group,
         child_compute_context,
         child_instance_key,
-        active_node_group_instance_key);
+        active_node_group_instance_key,
+        compute_context_cache);
     if (hash.has_value()) {
       return hash;
     }
@@ -745,38 +806,47 @@ static std::optional<ComputeContextHash> compute_active_compute_context_hash_rec
   return std::nullopt;
 }
 
-ComputeContextHash compute_active_compute_context_hash(const Scene &scene)
+std::optional<ComputeContextHash> compute_viewer_compute_context_hash(const Scene &scene)
 {
-  const bke::DataBlockComputeContext scene_compute_context(nullptr, scene.id);
+  bke::ComputeContextCache compute_context_cache;
+  const bke::DataBlockComputeContext &scene_compute_context = compute_context_cache.for_data_block(
+      nullptr, scene.id);
   const SceneCompositorEffect *active_effect = get_active_effect(scene);
   if (!active_effect) {
-    return scene_compute_context.hash();
+    return std::nullopt;
   }
 
-  const bke::SceneCompositorEffectComputeContext effect_compute_context(&scene_compute_context,
-                                                                        *active_effect);
-
-  if (!active_effect->node_group || ID_MISSING(active_effect->node_group)) {
-    return effect_compute_context.hash();
+  if (!is_effect_enabled(*active_effect, ExecutionMode::Preview)) {
+    return std::nullopt;
   }
 
-  return compute_active_compute_context_hash_recursive(
-             *active_effect->node_group,
-             effect_compute_context,
-             bke::NODE_INSTANCE_KEY_BASE,
-             active_effect->node_group->active_viewer_key)
-      .value_or(effect_compute_context.hash());
+  const bke::SceneCompositorEffectComputeContext &effect_compute_context =
+      compute_context_cache.for_scene_compositor_effect(&scene_compute_context, *active_effect);
+
+  const bNodeTree *original_node_group = DEG_get_original(active_effect->node_group);
+  if (!original_node_group || ID_MISSING(original_node_group)) {
+    return std::nullopt;
+  }
+
+  return compute_viewer_compute_context_hash_recursive(
+      *active_effect->node_group,
+      effect_compute_context,
+      bke::NODE_INSTANCE_KEY_BASE,
+      active_effect->node_group->active_viewer_key,
+      compute_context_cache);
 }
 
-ComputeContextHash compute_active_compute_context_hash(const Scene &scene,
-                                                       const bNodeTree &root_node_group)
+std::optional<ComputeContextHash> compute_viewer_compute_context_hash(
+    const Scene &scene, const bNodeTree &root_node_group)
 {
-  const bke::DataBlockComputeContext root_compute_context(nullptr, scene.id);
-  return compute_active_compute_context_hash_recursive(root_node_group,
-                                                       root_compute_context,
+  bke::ComputeContextCache compute_context_cache;
+  const bke::DataBlockComputeContext &scene_compute_context = compute_context_cache.for_data_block(
+      nullptr, scene.id);
+  return compute_viewer_compute_context_hash_recursive(root_node_group,
+                                                       scene_compute_context,
                                                        bke::NODE_INSTANCE_KEY_BASE,
-                                                       root_node_group.active_viewer_key)
-      .value_or(root_compute_context.hash());
+                                                       root_node_group.active_viewer_key,
+                                                       compute_context_cache);
 }
 
 }  // namespace blender::bke::compositor

@@ -1266,9 +1266,9 @@ void BKE_mesh_legacy_sharp_faces_from_flags(Mesh *mesh)
   const Span<MPoly> polys(
       static_cast<const MPoly *>(CustomData_get_layer(&mesh->face_data, CD_MPOLY)),
       mesh->faces_num);
-  if (std::any_of(polys.begin(), polys.end(), [](const MPoly &poly) {
-        return !(poly.flag_legacy & ME_SMOOTH);
-      }))
+  if (std::any_of(polys.begin(),
+                  polys.end(),
+                  [](const MPoly &poly) { return !(poly.flag_legacy & ME_SMOOTH); }))
   {
     SpanAttributeWriter<bool> sharp_faces = attributes.lookup_or_add_for_write_only_span<bool>(
         "sharp_face", AttrDomain::Face);
@@ -1518,9 +1518,9 @@ void BKE_mesh_legacy_sharp_edges_from_flags(Mesh *mesh)
   if (attributes.contains("sharp_edge")) {
     return;
   }
-  if (std::any_of(edges.begin(), edges.end(), [](const MEdge &edge) {
-        return edge.flag_legacy & ME_SHARP;
-      }))
+  if (std::any_of(edges.begin(),
+                  edges.end(),
+                  [](const MEdge &edge) { return edge.flag_legacy & ME_SHARP; }))
   {
     SpanAttributeWriter<bool> sharp_edges = attributes.lookup_or_add_for_write_only_span<bool>(
         "sharp_edge", AttrDomain::Edge);
@@ -1550,9 +1550,9 @@ void BKE_mesh_legacy_uv_seam_from_flags(Mesh *mesh)
   if (attributes.contains(".uv_seam")) {
     return;
   }
-  if (std::any_of(edges.begin(), edges.end(), [](const MEdge &edge) {
-        return edge.flag_legacy & ME_SEAM;
-      }))
+  if (std::any_of(edges.begin(),
+                  edges.end(),
+                  [](const MEdge &edge) { return edge.flag_legacy & ME_SEAM; }))
   {
     SpanAttributeWriter<bool> uv_seams = attributes.lookup_or_add_for_write_only_span<bool>(
         ".uv_seam", AttrDomain::Edge);
@@ -1581,9 +1581,9 @@ void BKE_mesh_legacy_convert_flags_to_hide_layers(Mesh *mesh)
     return;
   }
   const Span<MVert> verts(mesh->mvert, mesh->verts_num);
-  if (std::any_of(verts.begin(), verts.end(), [](const MVert &vert) {
-        return vert.flag_legacy & ME_HIDE;
-      }))
+  if (std::any_of(verts.begin(),
+                  verts.end(),
+                  [](const MVert &vert) { return vert.flag_legacy & ME_HIDE; }))
   {
     SpanAttributeWriter<bool> hide_vert = attributes.lookup_or_add_for_write_only_span<bool>(
         ".hide_vert", AttrDomain::Point);
@@ -1597,9 +1597,9 @@ void BKE_mesh_legacy_convert_flags_to_hide_layers(Mesh *mesh)
 
   if (mesh->medge) {
     const Span<MEdge> edges(mesh->medge, mesh->edges_num);
-    if (std::any_of(edges.begin(), edges.end(), [](const MEdge &edge) {
-          return int(edge.flag_legacy) & ME_HIDE;
-        }))
+    if (std::any_of(edges.begin(),
+                    edges.end(),
+                    [](const MEdge &edge) { return int(edge.flag_legacy) & ME_HIDE; }))
     {
       SpanAttributeWriter<bool> hide_edge = attributes.lookup_or_add_for_write_only_span<bool>(
           ".hide_edge", AttrDomain::Edge);
@@ -1615,9 +1615,9 @@ void BKE_mesh_legacy_convert_flags_to_hide_layers(Mesh *mesh)
   const Span<MPoly> polys(
       static_cast<const MPoly *>(CustomData_get_layer(&mesh->face_data, CD_MPOLY)),
       mesh->faces_num);
-  if (std::any_of(polys.begin(), polys.end(), [](const MPoly &poly) {
-        return int(poly.flag_legacy) & ME_HIDE;
-      }))
+  if (std::any_of(polys.begin(),
+                  polys.end(),
+                  [](const MPoly &poly) { return int(poly.flag_legacy) & ME_HIDE; }))
   {
     SpanAttributeWriter<bool> hide_poly = attributes.lookup_or_add_for_write_only_span<bool>(
         ".hide_poly", AttrDomain::Face);
@@ -1759,6 +1759,7 @@ void BKE_mesh_legacy_convert_uvs_to_generic(Mesh *mesh)
 
 /** \} */
 
+/* -------------------------------------------------------------------- */
 /** \name Selection Attribute and Legacy Flag Conversion
  * \{ */
 
@@ -1788,9 +1789,9 @@ void BKE_mesh_legacy_convert_flags_to_selection_layers(Mesh *mesh)
 
   if (mesh->medge) {
     const Span<MEdge> edges(mesh->medge, mesh->edges_num);
-    if (std::any_of(edges.begin(), edges.end(), [](const MEdge &edge) {
-          return edge.flag_legacy & SELECT;
-        }))
+    if (std::any_of(edges.begin(),
+                    edges.end(),
+                    [](const MEdge &edge) { return edge.flag_legacy & SELECT; }))
     {
       SpanAttributeWriter<bool> select_edge = attributes.lookup_or_add_for_write_only_span<bool>(
           ".select_edge", AttrDomain::Edge);
@@ -1806,9 +1807,9 @@ void BKE_mesh_legacy_convert_flags_to_selection_layers(Mesh *mesh)
   const Span<MPoly> polys(
       static_cast<const MPoly *>(CustomData_get_layer(&mesh->face_data, CD_MPOLY)),
       mesh->faces_num);
-  if (std::any_of(polys.begin(), polys.end(), [](const MPoly &poly) {
-        return poly.flag_legacy & ME_FACE_SEL;
-      }))
+  if (std::any_of(polys.begin(),
+                  polys.end(),
+                  [](const MPoly &poly) { return poly.flag_legacy & ME_FACE_SEL; }))
   {
     SpanAttributeWriter<bool> select_poly = attributes.lookup_or_add_for_write_only_span<bool>(
         ".select_poly", AttrDomain::Face);
@@ -2224,10 +2225,7 @@ static bool is_auto_smooth_node_tree(const bNodeTree &group)
   if (nodes[3]->custom1 != int16_t(bke::AttrDomain::Edge)) {
     return false;
   }
-  if (static_cast<bNodeSocket *>(nodes[4]->inputs.last)
-          ->default_value_typed<bNodeSocketValueBoolean>()
-          ->value != 1)
-  {
+  if (nodes[4]->inputs.last()->default_value_typed<bNodeSocketValueBoolean>()->value != 1) {
     return false;
   }
   if (nodes[4]->custom1 != int16_t(bke::AttrDomain::Face)) {
@@ -2357,7 +2355,7 @@ void BKE_main_mesh_legacy_convert_auto_smooth(Main &bmain)
         WeightedNormalModifierData *nmd = reinterpret_cast<WeightedNormalModifierData *>(&md);
         if ((nmd->flag & MOD_WEIGHTEDNORMAL_KEEP_SHARP) != 0) {
           ModifierData *new_md = create_auto_smooth_modifier(object, add_node_group, angle);
-          BLI_insertlinkbefore(&object.modifiers, object.modifiers.last, new_md);
+          BLI_insertlinkbefore(&object.modifiers, object.modifiers.last(), new_md);
         }
       }
       if (md.type == eModifierType_Nodes) {
@@ -2381,7 +2379,7 @@ void BKE_main_mesh_legacy_convert_auto_smooth(Main &bmain)
       continue;
     }
 
-    ModifierData *last_md = static_cast<ModifierData *>(object.modifiers.last);
+    ModifierData *last_md = object.modifiers.last();
     ModifierData *new_md = create_auto_smooth_modifier(object, add_node_group, angle);
     if (last_md && last_md->type == eModifierType_Subsurf && has_custom_normals &&
         (reinterpret_cast<SubsurfModifierData *>(last_md)->flags &
@@ -2389,7 +2387,7 @@ void BKE_main_mesh_legacy_convert_auto_smooth(Main &bmain)
     {
       /* Add the auto smooth node group before the last subdivision surface modifier if possible.
        * Subdivision surface modifiers have special handling for interpolating custom normals. */
-      BLI_insertlinkbefore(&object.modifiers, object.modifiers.last, new_md);
+      BLI_insertlinkbefore(&object.modifiers, object.modifiers.last(), new_md);
     }
     else {
       BLI_addtail(&object.modifiers, new_md);

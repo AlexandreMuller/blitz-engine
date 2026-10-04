@@ -113,7 +113,11 @@ static void library_foreach_id(ID *id, LibraryForeachIDData *data)
 {
   Library *lib = id_cast<Library *>(id);
   const LibraryForeachIDFlag foreach_flag = BKE_lib_query_foreachid_process_flags_get(data);
-  BKE_LIB_FOREACHID_PROCESS_IDSUPER(data, lib->runtime->parent, IDWALK_CB_NEVER_SELF);
+  BKE_LIB_FOREACHID_PROCESS_IDSUPER(
+      data,
+      lib->runtime->parent,
+      /* The Library::runtime->parent pointer is strictly runtime informative data currently. */
+      (IDWALK_CB_NEVER_SELF | IDWALK_CB_READFILE_IGNORE | IDWALK_CB_WRITEFILE_IGNORE));
 
   if (lib->flag & LIBRARY_FLAG_IS_ARCHIVE) {
     /* Archive library must have a parent, this can't be nullptr. */
@@ -165,7 +169,7 @@ static void library_foreach_path(ID *id, BPathForeachPathData *bpath_data)
 static void library_blend_write_data(BlendWriter *writer, ID *id, const void *id_address)
 {
   Library *library = reinterpret_cast<Library *>(id);
-  const bool is_undo = BLO_write_is_undo(writer);
+  const bool is_undo = writer->is_undo();
 
   /* Runtime tags need to be preserved across undo steps. */
   if (is_undo) {
@@ -231,6 +235,7 @@ IDTypeInfo IDType_ID_LI = {
     .foreach_cache = nullptr,
     .foreach_path = library_foreach_path,
     .foreach_working_space_color = nullptr,
+    .foreach_asset_weak_reference = nullptr,
     .owner_pointer_get = nullptr,
 
     .blend_write = library_blend_write_data,

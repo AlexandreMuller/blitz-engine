@@ -423,7 +423,7 @@ static void split_libdata(ListBaseT<ID> *lb_src,
                           Vector<Main *> &lib_main_array,
                           const bool do_split_packed_ids)
 {
-  for (ID *id = static_cast<ID *>(lb_src->first), *idnext; id; id = idnext) {
+  for (ID *id = lb_src->first(), *idnext; id; id = idnext) {
     idnext = static_cast<ID *>(id->next);
 
     if (id->lib && (do_split_packed_ids || (id->lib->flag & LIBRARY_FLAG_IS_ARCHIVE) == 0)) {
@@ -465,7 +465,7 @@ void blo_split_main(Main *bmain, const bool do_split_packed_ids)
 
   int i = 0;
   int lib_index = 0;
-  for (Library *lib = static_cast<Library *>(bmain->libraries.first); lib;
+  for (Library *lib = bmain->libraries.first(); lib;
        lib = static_cast<Library *>(lib->id.next), i++)
   {
     if (!do_split_packed_ids && (lib->flag & LIBRARY_FLAG_IS_ARCHIVE) != 0) {
@@ -489,7 +489,7 @@ void blo_split_main(Main *bmain, const bool do_split_packed_ids)
   MainListsArray lbarray = BKE_main_lists_get(*bmain);
   i = lbarray.size();
   while (i--) {
-    ID *id = static_cast<ID *>(lbarray[i]->first);
+    ID *id = lbarray[i]->first();
     if (id == nullptr || id->id_type() == ID_LI) {
       /* No ID_LI data-block should ever be linked anyway, but just in case, better be explicit. */
       continue;
@@ -706,7 +706,7 @@ BHead *blo_bhead_first(FileData *fd)
   /* Rewind the file
    * Read in a new block if necessary
    */
-  new_bhead = static_cast<BHeadN *>(fd->bhead_list.first);
+  new_bhead = fd->bhead_list.first();
   if (new_bhead == nullptr) {
     new_bhead = get_bhead(fd);
   }
@@ -1704,7 +1704,7 @@ void blo_cache_storage_init(FileData *fd, Main *bmain)
 
     ListBaseT<ID> *lb;
     FOREACH_MAIN_LISTBASE_BEGIN (bmain, lb) {
-      ID *id = static_cast<ID *>(lb->first);
+      ID *id = lb->first();
       if (id == nullptr) {
         continue;
       }
@@ -1734,7 +1734,7 @@ void blo_cache_storage_old_bmain_clear(FileData *fd, Main *bmain_old)
   if (fd->cache_storage != nullptr) {
     ListBaseT<ID> *lb;
     FOREACH_MAIN_LISTBASE_BEGIN (bmain_old, lb) {
-      ID *id = static_cast<ID *>(lb->first);
+      ID *id = lb->first();
       if (id == nullptr) {
         continue;
       }
@@ -1993,13 +1993,13 @@ static void link_glob_list(FileData *fd, ListBase *lb) /* for glob data */
   if (BLI_listbase_is_empty(lb)) {
     return;
   }
-  poin = newdataadr(fd, lb->first);
-  if (lb->first) {
-    oldnewmap_insert(fd->globmap, lb->first, poin, 0);
+  poin = newdataadr(fd, lb->first_);
+  if (lb->first_) {
+    oldnewmap_insert(fd->globmap, lb->first_, poin, 0);
   }
-  lb->first = poin;
+  lb->first_ = poin;
 
-  ln = static_cast<Link *>(lb->first);
+  ln = static_cast<Link *>(lb->first_);
   prev = nullptr;
   while (ln) {
     poin = newdataadr(fd, ln->next);
@@ -2011,7 +2011,7 @@ static void link_glob_list(FileData *fd, ListBase *lb) /* for glob data */
     prev = ln;
     ln = ln->next;
   }
-  lb->last = prev;
+  lb->last_ = prev;
 }
 
 /** \} */
@@ -2504,7 +2504,6 @@ static void lib_link_scenes_check_set(Main *bmain)
 /** \} */
 
 /* -------------------------------------------------------------------- */
-
 /** \name Read ID: Library
  * \{ */
 
@@ -2929,7 +2928,7 @@ static void read_undo_tag_all_noundo_ids(FileData *fd)
         continue;
       }
 
-      ID *id = static_cast<ID *>(lbarray[i]->first);
+      ID *id = lbarray[i]->first();
       const IDTypeInfo *id_type = BKE_idtype_get_info_from_id(id);
       if ((id_type->flags & IDTYPE_FLAGS_NO_MEMFILE_UNDO) == 0) {
         continue;
@@ -3006,7 +3005,7 @@ static void read_undo_reuse_noundo_local_ids(FileData *fd)
     }
 
     /* Only move 'noundo' local IDs. */
-    ID *id = static_cast<ID *>(lbarray[i]->first);
+    ID *id = lbarray[i]->first();
     const IDTypeInfo *id_type = BKE_idtype_get_info_from_id(id);
     if ((id_type->flags & IDTYPE_FLAGS_NO_MEMFILE_UNDO) == 0) {
       continue;
@@ -3764,7 +3763,7 @@ static void link_global(FileData *fd, BlendFileData *bfd)
     }
   }
   if (bfd->curscene == nullptr) {
-    bfd->curscene = static_cast<Scene *>(bfd->main->scenes.first);
+    bfd->curscene = bfd->main->scenes.first();
   }
 }
 
@@ -4207,7 +4206,7 @@ static BHead *read_userdef(BlendFileData *bfd, FileData *fd, BHead *bhead)
   }
 
   /* XXX */
-  user->uifonts.first = user->uifonts.last = nullptr;
+  user->uifonts.first_ = user->uifonts.last_ = nullptr;
 
   BLO_read_struct_list(reader, uiStyle, &user->uistyles);
 
@@ -5722,7 +5721,7 @@ static void read_library_linked_id(
     FileData *basefd, FileData *fd, Main *mainvar, ID *id, ID **r_id)
 {
   BHead *bhead = nullptr;
-  BLI_assert_msg(!ID_IS_PACKED(id), "Packed IDs should never take this codepath.");
+  BLI_assert_msg(!ID_IS_PACKED(id), "Packed IDs should never take this code-path.");
   const bool is_valid = BKE_idtype_idcode_is_linkable(id->id_type()) ||
                         ((id->tag & ID_TAG_EXTERN) == 0);
 
@@ -5782,7 +5781,7 @@ static void read_library_linked_ids(FileData *basefd, FileData *fd, Main *mainva
   MainListsArray lbarray = BKE_main_lists_get(*mainvar);
   int a = lbarray.size();
   while (a--) {
-    ID *id = static_cast<ID *>(lbarray[a]->first);
+    ID *id = lbarray[a]->first();
 
     while (id) {
       ID *id_next = static_cast<ID *>(id->next);
@@ -5863,7 +5862,7 @@ static void read_library_clear_weak_links(FileData *basefd, Main *mainvar)
   MainListsArray lbarray = BKE_main_lists_get(*mainvar);
   int a = lbarray.size();
   while (a--) {
-    ID *id = static_cast<ID *>(lbarray[a]->first);
+    ID *id = lbarray[a]->first();
 
     while (id) {
       ID *id_next = static_cast<ID *>(id->next);
@@ -6100,8 +6099,10 @@ static void *blo_verify_data_address(FileData *fd,
 {
   if (new_address != nullptr) {
     /* Not testing equality, since size might have been aligned up,
-     * or might be passed the size of a base struct with inheritance. */
-    if (alloc_len < int64_t(expected_size)) {
+     * or might be passed the size of a base struct with inheritance.
+     *
+     * Note we cast to size_t so integer overflow will fail the check. */
+    if (size_t(alloc_len) < expected_size) {
       blo_readfile_invalidate(fd,
                               (*fd->bmain->split_mains)[fd->bmain->split_mains->size() - 1],
                               "Corrupt .blend file, unexpected data size.");
@@ -6250,8 +6251,8 @@ void BLO_read_struct_list_with_size(BlendDataReader *reader,
     return;
   }
 
-  list->first = blo_read_struct_impl(reader, list->first, expected_elem_size);
-  Link *ln = static_cast<Link *>(list->first);
+  list->first_ = blo_read_struct_impl(reader, list->first_, expected_elem_size);
+  Link *ln = static_cast<Link *>(list->first_);
   Link *prev = nullptr;
   while (ln) {
     ln->next = static_cast<Link *>(blo_read_struct_impl(reader, ln->next, expected_elem_size));
@@ -6259,7 +6260,7 @@ void BLO_read_struct_list_with_size(BlendDataReader *reader,
     prev = ln;
     ln = ln->next;
   }
-  list->last = prev;
+  list->last_ = prev;
 }
 
 void BLO_read_string(BlendDataReader *reader, char **ptr_p)

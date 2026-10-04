@@ -729,8 +729,8 @@ static void change_output_socket_to_rotation_type(bNodeTree &ntree,
       /* No need to add the conversion node when implicit conversions will work. */
       continue;
     }
-    if (STREQ(link.tonode->idname, "FunctionNodeRotationToEuler"))
-    { /* Make versioning idempotent. */
+    if (STREQ(link.tonode->idname,
+              "FunctionNodeRotationToEuler")) { /* Make versioning idempotent. */
       continue;
     }
     bNode *convert = bke::node_add_node(nullptr, ntree, "FunctionNodeRotationToEuler"_ustr);
@@ -790,14 +790,10 @@ static void fix_geometry_nodes_object_info_scale(bNodeTree &ntree)
     absolute_value->parent = node.parent;
     absolute_value->locx_legacy = node.locx_legacy + 100;
     absolute_value->locy_legacy = node.locy_legacy - 50;
-    bke::node_add_link(*&ntree,
-                       node,
-                       *scale,
-                       *absolute_value,
-                       *static_cast<bNodeSocket *>(absolute_value->inputs.first));
+    bke::node_add_link(*&ntree, node, *scale, *absolute_value, *absolute_value->inputs.first());
     for (bNodeLink *link : links) {
       link->fromnode = absolute_value;
-      link->fromsock = static_cast<bNodeSocket *>(absolute_value->outputs.first);
+      link->fromsock = absolute_value->outputs.first();
     }
   }
 }
@@ -902,8 +898,9 @@ void blo_do_versions_401(FileData *fd, Library * /*lib*/, Main *bmain)
     for (bScreen &screen : bmain->screens) {
       for (ScrArea &area : screen.areabase) {
         for (SpaceLink &sl : area.spacedata) {
-          const ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first) ? &area.regionbase :
-                                                                                 &sl.regionbase;
+          const ListBaseT<ARegion> *regionbase = (&sl == area.spacedata.first_) ?
+                                                     &area.regionbase :
+                                                     &sl.regionbase;
           for (ARegion &region : *regionbase) {
             if (region.regiontype != RGN_TYPE_ASSET_SHELF_HEADER) {
               continue;

@@ -81,6 +81,7 @@ set(SRC
   intern/index_mask_expression.cc
   intern/index_range.cc
   intern/jitter_2d.cc
+  intern/kdtree.cc
   intern/lasso_2d.cc
   intern/lazy_threading.cc
   intern/length_parameterize.cc
@@ -208,6 +209,7 @@ set(SRC
   BLI_compression.hh
   BLI_compute_context.hh
   BLI_concurrent_map.hh
+  BLI_concurrent_set.hh
   BLI_console.hh
   BLI_convexhull_2d.hh
   BLI_cpp_type.hh
@@ -218,8 +220,8 @@ set(SRC
   BLI_dial_2d.hh
   BLI_disjoint_set.hh
   BLI_dot_export.hh
-  BLI_dot_export_fwd.hh
   BLI_dot_export_attribute_enums.hh
+  BLI_dot_export_fwd.hh
   BLI_dynamic_stack_buffer.hh
   BLI_dynlib.h
   BLI_dynstr.hh
@@ -273,6 +275,7 @@ set(SRC
   BLI_jitter_2d.hh
   BLI_kdopbvh.hh
   BLI_kdtree.hh
+  BLI_kdtree_new.hh
   BLI_kdtree_types.hh
   BLI_lasso_2d.hh
   BLI_lazy_threading.hh
@@ -549,6 +552,7 @@ if(WITH_GTESTS)
     tests/BLI_index_ranges_builder_test.cc
     tests/BLI_inplace_priority_queue_test.cc
     tests/BLI_kdopbvh_test.cc
+    tests/BLI_kdtree_test.cc
     tests/BLI_length_parameterize_test.cc
     tests/BLI_linear_allocator_chunked_list_test.cc
     tests/BLI_linear_allocator_test.cc
