@@ -1,9 +1,9 @@
 
 msgid ""
 msgstr ""
-"Project-Id-Version: Blender 5.3.0 Alpha (b'2cef5b8c951a')\n"
+"Project-Id-Version: Blender 5.3.0 Beta (b'8f7aae950179')\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-14 07:47+0000\n"
+"POT-Creation-Date: 2026-10-12 07:32+0000\n"
 "PO-Revision-Date: 2025-07-23 15:18+0000\n"
 "Last-Translator: Aras Pranckevičius <aras@nesnausk.org>\n"
 "Language-Team: Lithuanian <https://translate.blender.org/projects/blender-ui/ui/lt/>\n"
@@ -1041,6 +1041,10 @@ msgid "Version"
 msgstr "Versija"
 
 
+msgid "Blender"
+msgstr "„Blender“"
+
+
 msgid "Not yet defined"
 msgstr "Dar nėra apibrėžtas"
 
@@ -1056,6 +1060,10 @@ msgstr "ID tipas"
 
 msgid "Import Info"
 msgstr "Importavimo informacija"
+
+
+msgid "Path"
+msgstr "Kelias"
 
 
 msgid "Avoid"
@@ -2389,10 +2397,6 @@ msgid "Usage"
 msgstr "Naudojimas/Vartojimas"
 
 
-msgid "Path"
-msgstr "Kelias"
-
-
 msgid "Follow"
 msgstr "Sekti"
 
@@ -3117,10 +3121,6 @@ msgid "Python"
 msgstr "„Python“"
 
 
-msgid "Blender"
-msgstr "„Blender“"
-
-
 msgid "System"
 msgstr "Sistema"
 
@@ -3632,6 +3632,10 @@ msgid "No device - there will be no audio output"
 msgstr "Nėra įrenginio – nebus jokios garso išvesties"
 
 
+msgid "CUDA"
+msgstr "„CUDA“"
+
+
 msgid "Language"
 msgstr "Kalba"
 
@@ -3642,10 +3646,6 @@ msgstr "Kalba, naudojama vertimui"
 
 msgid "Skip Save"
 msgstr "Praleisti išsaugojimą"
-
-
-msgid "CUDA"
-msgstr "„CUDA“"
 
 
 msgid "OptiX"

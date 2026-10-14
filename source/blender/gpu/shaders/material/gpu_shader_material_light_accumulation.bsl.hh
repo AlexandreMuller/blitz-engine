@@ -5,7 +5,6 @@
 #pragma once
 
 #include "gpu_shader_material_interface.bsl.hh"
-#include "gpu_shader_utildefines.bsl.hh"
 
 [[node]]
 void node_light_accumulation(const float light_index,
@@ -16,7 +15,7 @@ void node_light_accumulation(const float light_index,
                              float4 transmission_light,
                              float4 transmission_color,
                              float weight,
-                             [[resource_table]] KernelGlobals &kg,
+                             KernelGlobals &kg,
                              ShadingData &sd,
                              Closure &result)
 {

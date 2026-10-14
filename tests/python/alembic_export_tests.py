@@ -626,7 +626,7 @@ class AttributesExportTest(AbstractAlembicTest):
 
     @with_tempdir
     def test_export_geometry_nodes_attributes_constant(self, tempdir: pathlib.Path):
-        """Test attributes which can be created with geomety nodes where values are constant"""
+        """Test attributes which can be created with geometry nodes where values are constant"""
 
         abc = tempdir / 'attributes-export-constant-test.abc'
         script = (
@@ -681,7 +681,7 @@ class AttributesExportTest(AbstractAlembicTest):
 
     @with_tempdir
     def test_export_geometry_nodes_attributes_random(self, tempdir: pathlib.Path):
-        """Test attributes which can be created with geomety nodes where values are random"""
+        """Test attributes which can be created with geometry nodes where values are random"""
 
         abc = tempdir / 'attributes-export-random-test.abc'
         script = (
@@ -737,7 +737,7 @@ class AttributesExportTest(AbstractAlembicTest):
 
     @with_tempdir
     def test_export_extra_attributes(self, tempdir: pathlib.Path):
-        """Test attributes which cannot be created with geomety nodes, but can via the Python API"""
+        """Test attributes which cannot be created with geometry nodes, but can via the Python API"""
 
         abc = tempdir / 'attributes-extra-export-test.abc'
         script = (
@@ -826,6 +826,28 @@ class WidthScopeExportTest(AbstractAlembicTest):
     def do_check_widths(self, abc, geom_path, expected_values, prop_key):
         abcprop = self.abcprop(abc, geom_path)
         self.assertEqual(abcprop[prop_key], expected_values)
+
+
+class DataValidationExportTest(AbstractAlembicTest):
+    """Test to ensure that invalid data does not crash Blender"""
+
+    @with_tempdir
+    def test_attribute_redefinition(self, tempdir: pathlib.Path):
+        abc = tempdir / 'attribute-changing-type.abc'
+        script = (
+            "import bpy; bpy.context.scene.frame_set(1); "
+            "bpy.ops.wm.alembic_export(filepath='%s')" % abc.as_posix()
+        )
+        self.run_blender('attribute-changing-type.blend', script)
+
+    @with_tempdir
+    def test_invalid_names(self, tempdir: pathlib.Path):
+        abc = tempdir / 'invalid-names.abc'
+        script = (
+            "import bpy; bpy.context.scene.frame_set(1); "
+            "bpy.ops.wm.alembic_export(filepath='%s', start=1, end=1, vcolors=True)" % abc.as_posix()
+        )
+        self.run_blender('invalid-names.blend', script)
 
 
 if __name__ == '__main__':

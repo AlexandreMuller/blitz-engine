@@ -283,7 +283,7 @@ struct Button : NonMovable {
 
   /** Run an action when holding the button down. */
   ButtonHandleHoldFunc hold_func = nullptr;
-  void *hold_argN = nullptr;
+  std::string *hold_arg = nullptr;
 
   uiLink *link = nullptr;
   int linkto[2]; /* region relative coords */
@@ -456,7 +456,7 @@ struct ButtonNumberSlider : public Button {
 
 /** Derived struct for #ButtonType::Color */
 struct ButtonColor : public Button {
-  bool is_pallete_color = false;
+  bool is_palette_color = false;
   int palette_color_index = -1;
 };
 
@@ -546,6 +546,12 @@ struct ButtonLabel : public Button {
   /** Maximum lines to be drawn in multi-line labels, 0 means all. */
   int max_lines = 0;
   FontStyleAlign text_align = UI_STYLE_TEXT_LEFT;
+};
+
+/** Derived struct for #ButtonType::Image. */
+struct ButtonImage : public Button {
+  /** Uniquely identifies the image, to reuse it from the previous redraw. */
+  std::string key;
 };
 
 /** Derived struct for #ButtonType::Scroll. */

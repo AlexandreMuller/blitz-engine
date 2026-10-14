@@ -235,8 +235,8 @@ T *SymbolScope::lookup_generic(const SymbolTable &table,
     /* Resolve class pointer/type from `this_` symbol */
     const SymbolClass *cls = this_var->type;
     const SymbolScope *this_scope = static_cast<const SymbolScope *>(cls);
-    if (auto v = this_scope->lookup_generic<T>(table, id, loc)) {
-      LOOKUP_LOG("[Lookup] Symbol found in class scope '" << cls->scope->identifier << "'.\n")
+    if (auto v = this_scope->lookup_generic<T>(table, id, loc); v && !v->is_error) {
+      LOOKUP_LOG("[Lookup] Symbol found in class scope '" << cls->identifier << "'.\n")
       return v;
     }
   }
@@ -366,17 +366,20 @@ T *SymbolScope::lookup_generic_nested(const SymbolTable &table,
 
 SymbolClass *SymbolScope::lookup_class(string id) const
 {
-  return classes.find(id)->second.second;
+  auto it = classes.find(id);
+  return it != classes.end() ? it->second.second : nullptr;
 }
 
 SymbolFunction *SymbolScope::lookup_function(string id) const
 {
-  return functions.find(id)->second.second;
+  auto it = functions.find(id);
+  return it != functions.end() ? it->second.second : nullptr;
 }
 
 SymbolVariable *SymbolScope::lookup_variable(string id) const
 {
-  return variables.find(id)->second.second;
+  auto it = variables.find(id);
+  return it != variables.end() ? it->second.second : nullptr;
 }
 
 SymbolClass *SymbolScope::as_class()

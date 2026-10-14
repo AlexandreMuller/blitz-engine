@@ -224,6 +224,8 @@ if(WITH_BLENDER OR WITH_PLAYER)
       axis_side
       axis_top
       back
+      backdrop_pan
+      backdrop_zoom
       blank1
       blender
       blender_logo_large
@@ -345,6 +347,7 @@ if(WITH_BLENDER OR WITH_PLAYER)
       error
       experimental
       export
+      extension
       external_drive
       external_drive_large
       eyedropper
@@ -830,6 +833,9 @@ if(WITH_BLENDER OR WITH_PLAYER)
       seq_chroma_scope
       seq_histogram
       seq_luma_waveform
+      seq_overlap_overwrite
+      seq_overlap_ripple
+      seq_overlap_shuffle
       seq_preview
       seq_sequencer
       seq_splitview

@@ -7,8 +7,12 @@
 #include "BLI_assert.hh"
 #include "BLI_vector.hh"
 
-#include "DNA_node_types.h"
+#include "BLT_translation.hh"
 
+#include "DNA_node_types.h"
+#include "DNA_userdef_types.h"
+
+#include "BKE_compute_context_cache.hh"
 #include "BKE_compute_contexts.hh"
 #include "BKE_node.hh"
 #include "BKE_node_runtime.hh"
@@ -54,8 +58,16 @@ class GroupNodeOperation : public NodeOperation {
       return;
     }
 
-    const bke::GroupNodeComputeContext compute_context(
-        &this->get_compute_context(), this->node().identifier, &this->node().owner_tree());
+    if (this->get_compute_context().parents_num() >= U.nodes_stack_limit) {
+      this->add_warning(nodes::NodeWarningType::Error,
+                        TIP_("Stack limit reached. Group node is ignored."));
+      this->allocate_default_remaining_outputs();
+      return;
+    }
+
+    const bke::GroupNodeComputeContext &compute_context =
+        this->context().compute_context_cache().for_group_node(
+            &this->get_compute_context(), this->node().identifier, &this->node().owner_tree());
     NodeGroupOperation operation(this->context(), *node_group, compute_context);
 
     this->set_reference_counts(operation);

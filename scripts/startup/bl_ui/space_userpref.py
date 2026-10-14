@@ -908,6 +908,14 @@ class USERPREF_PT_system_video_sequencer(SystemPanel, CenterAlignMixIn, Panel):
 
         layout.prop(system, "sequencer_proxy_setup")
 
+        layout.separator()
+
+        layout.prop(system, "use_hardware_video_decoding")
+        if prefs.experimental.use_video_decoding_debug and prefs.view.show_developer_ui:
+            row = layout.row()
+            row.active = system.use_hardware_video_decoding
+            row.prop(system, "video_decoding_device")
+
 
 # -----------------------------------------------------------------------------
 # Viewport Panels
@@ -1898,6 +1906,9 @@ class USERPREF_PT_saveload_blend(SaveLoadPanel, CenterAlignMixIn, Panel):
         col.prop(paths, "use_relative_paths")
         col.prop(paths, "use_file_compression")
         col.prop(paths, "use_load_ui")
+
+        col = layout.column(heading="Startup")
+        col.prop(prefs, "use_project_remember")
 
         col = layout.column(heading="Text Files")
         col.prop(paths, "use_tabs_as_spaces")
@@ -3006,6 +3017,7 @@ class USERPREF_PT_developer_tools(Panel):
                 ({"property": "use_viewport_debug"}, None),
                 ({"property": "use_eevee_debug"}, None),
                 ({"property": "use_paint_debug"}, None),
+                ({"property": "use_video_decoding_debug"}, None),
                 ({"property": "use_extensions_debug"}, ("/blender/blender/issues/119521", "#119521")),
                 ({"property": "write_legacy_blend_file_format"}, ("/blender/blender/issues/129309", "#129309")),
                 ({"property": "no_data_block_packing"}, ("/blender/blender/issues/132167", "#132167")),
@@ -3053,7 +3065,6 @@ class USERPREF_PT_experimental_new_features(ExperimentalPanel, Panel):
                 ({"property": "use_extended_asset_browser"},
                  ("blender/blender/projects/10", "Pipeline, Assets & IO Project Page")),
                 ({"property": "use_shader_node_previews"}, ("blender/blender/issues/110353", "#110353")),
-                ({"property": "use_collection_importer"}, ("blender/blender/issues/132171", "#132171")),
             ),
         )
 

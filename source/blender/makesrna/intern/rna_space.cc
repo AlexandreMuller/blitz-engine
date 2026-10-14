@@ -188,7 +188,7 @@ const EnumPropertyItem rna_enum_space_type_items[] = {
     {SPACE_PROJECT,
      "PROJECT",
      ICON_PROJECT,
-     "Project Setup",
+     "Project Settings",
      "Manage the current Blender project"},
     {0, nullptr, 0, nullptr, nullptr},
 };
@@ -745,6 +745,7 @@ static const EnumPropertyItem spreadsheet_table_id_type_items[] = {
 #  include "BKE_paint.hh"
 #  include "BKE_preferences.h"
 #  include "BKE_scene.hh"
+#  include "BKE_scene_context.hh"
 #  include "BKE_screen.hh"
 #  include "BKE_studiolight.h"
 #  include "BKE_workspace.hh"
@@ -2781,8 +2782,7 @@ static void seq_build_proxy(bContext *C, PointerRNA *ptr)
 
 static void rna_SequenceEditor_render_size_update(bContext *C, PointerRNA *ptr)
 {
-  const bool is_sequencer = CTX_wm_space_seq(C) != nullptr;
-  Scene *scene = is_sequencer ? CTX_data_sequencer_scene(C) : CTX_data_scene(C);
+  Scene *scene = bke::scene_or_sequencer_scene_from_context(*C);
   if (scene == nullptr) {
     return;
   }
@@ -7173,11 +7173,12 @@ static void rna_def_space_sequencer(BlenderRNA *brna)
   RNA_def_property_update(prop, NC_SPACE | ND_SPACE_SEQUENCER, nullptr);
 
   prop = RNA_def_property(srna, "show_transform_preview", PROP_BOOLEAN, PROP_NONE);
-  RNA_def_property_boolean_sdna(prop, nullptr, "draw_flag", SEQ_DRAW_TRANSFORM_PREVIEW);
-  RNA_def_property_ui_text(prop,
-                           "Transform Preview",
-                           "Show a preview of the start or end frame of a strip while "
-                           "transforming its respective handle");
+  RNA_def_property_boolean_sdna(prop, nullptr, "draw_flag", SEQ_DRAW_EDIT_POINT_PREVIEW);
+  RNA_def_property_ui_text(
+      prop,
+      "Preview Edit Point",
+      "While editing in the timeline, show the affected frame instead of "
+      "the current frame, such as in the blade tool, or when tweaking handles");
   RNA_def_property_update(prop, NC_SPACE | ND_SPACE_SEQUENCER, nullptr);
 
   /* Gizmo toggles. */

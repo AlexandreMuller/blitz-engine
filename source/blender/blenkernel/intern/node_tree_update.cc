@@ -1523,7 +1523,10 @@ class NodeTreeMainUpdater {
         for (const bNodeSocket *linked_socket : socket->logically_linked_sockets()) {
           node->runtime->tmp_flag |= linked_socket->owner_node().runtime->tmp_flag;
           if (linked_socket->owner_node().type_legacy == SH_NODE_LIGHT_ACCUMULATION &&
-              ELEM(StringRefNull(linked_socket->name), "Diffuse Color", "Glossy Color"))
+              ELEM(StringRefNull(linked_socket->name),
+                   "Diffuse Color",
+                   "Glossy Color",
+                   "Transmission Color"))
           {
             node->runtime->tmp_flag |= short(ShaderNodeAncestorFlags::LightAccumulationColor);
           }
@@ -1580,7 +1583,10 @@ class NodeTreeMainUpdater {
           }
           if (bool(flags & ShaderNodeAncestorFlags::LightAccumulationColor) &&
               (link.tonode->type_legacy != SH_NODE_LIGHT_ACCUMULATION ||
-               ELEM(StringRefNull(link.tosock->name), "Diffuse Color", "Glossy Color")))
+               ELEM(StringRefNull(link.tosock->name),
+                    "Diffuse Color",
+                    "Glossy Color",
+                    "Transmission Color")))
           {
             return TIP_(
                 "Lighting nodes can't be connected to the Color sockets of a Light Accumulation "
@@ -1598,7 +1604,7 @@ class NodeTreeMainUpdater {
   void update_link_validation(bNodeTree &ntree)
   {
     const bNodeTreeZones *fallback_zones = nullptr;
-    if (ELEM(ntree.type, NTREE_GEOMETRY, NTREE_SHADER) && !ntree.zones() &&
+    if (ELEM(ntree.type, NTREE_GEOMETRY, NTREE_SHADER, NTREE_COMPOSIT) && !ntree.zones() &&
         ntree.runtime->last_valid_zones)
     {
       fallback_zones = ntree.runtime->last_valid_zones.get();
@@ -2376,24 +2382,17 @@ bool operator==(const bNestedNodePath &a, const bNestedNodePath &b)
   return a.node_id == b.node_id && a.id_in_node == b.id_in_node;
 }
 
-/**
- * Protect from recursive calls into the updating function. Some node update functions might
- * trigger this from Python or in other cases.
- *
- * This could be added to #Main, but given that there is generally only one #Main, that's not
- * really worth it now.
- */
-static bool is_updating = false;
-
 void BKE_ntree_update(Main &bmain,
                       const std::optional<Span<bNodeTree *>> modified_trees,
                       const NodeTreeUpdateExtraParams &params)
 {
-  if (is_updating) {
+  /* Protect from recursive calls into the updating function. Some node update functions might
+   * trigger this from Python or in other cases. */
+  if (bmain.is_updating_node_trees) {
     return;
   }
 
-  is_updating = true;
+  bmain.is_updating_node_trees = true;
   bke::NodeTreeMainUpdater updater{&bmain, params};
   if (modified_trees.has_value()) {
     updater.update_rooted(*modified_trees);
@@ -2401,7 +2400,7 @@ void BKE_ntree_update(Main &bmain,
   else {
     updater.update();
   }
-  is_updating = false;
+  bmain.is_updating_node_trees = false;
 }
 
 void BKE_ntree_update_after_single_tree_change(Main &bmain,
@@ -2414,14 +2413,17 @@ void BKE_ntree_update_after_single_tree_change(Main &bmain,
 void BKE_ntree_update_without_main(bNodeTree &tree)
 {
   BLI_assert(tree.id.tag & ID_TAG_NO_MAIN);
-  if (is_updating) {
+
+  /* Protect from recursive calls, see #BKE_ntree_update. */
+  if (tree.runtime->is_updating) {
     return;
   }
-  is_updating = true;
+
+  tree.runtime->is_updating = true;
   NodeTreeUpdateExtraParams params;
   bke::NodeTreeMainUpdater updater{nullptr, params};
   updater.update_rooted({&tree});
-  is_updating = false;
+  tree.runtime->is_updating = false;
 }
 
 }  // namespace blender

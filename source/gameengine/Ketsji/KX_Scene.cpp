@@ -572,6 +572,11 @@ void KX_Scene::RemoveUpbgeDupliInstanceFromList(KX_GameObject *gameobj)
   }
 }
 
+void KX_Scene::RequestTaaReset()
+{
+  m_taaResetRequested = true;
+}
+
 void KX_Scene::ReinitBlenderContextVariables()
 {
   blender::bContext *C = KX_GetActiveEngine()->GetContext();
@@ -962,6 +967,11 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
    * pure physics objects would stay frozen at their first evaluated transform. */
   for (KX_GameObject *gameobj : GetObjectList()) {
     gameobj->TagForTransformUpdateEvaluated(is_last_render_pass);
+  }
+
+  if (m_taaResetRequested) {
+    DEG_bump_update_count(depsgraph);
+    m_taaResetRequested = false;
   }
 
   blender::rcti window;

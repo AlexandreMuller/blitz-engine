@@ -938,8 +938,8 @@ static const EnumPropertyItem prop_cyclical_types[] = {
     {0, nullptr, 0, nullptr, nullptr},
 };
 
-static bke::CurvesGeometry subdivide_last_segement(const bke::CurvesGeometry &curves,
-                                                   const IndexMask &strokes)
+static bke::CurvesGeometry subdivide_last_segment(const bke::CurvesGeometry &curves,
+                                                  const IndexMask &strokes)
 {
   const VArray<bool> cyclic = curves.cyclic();
   const Span<float3> positions = curves.positions();
@@ -1020,7 +1020,7 @@ static wmOperatorStatus grease_pencil_cyclical_set_exec(bContext *C, wmOperator 
       /* Update to properly calculate the lengths. */
       curves.tag_topology_changed();
 
-      curves = subdivide_last_segement(curves, strokes);
+      curves = subdivide_last_segment(curves, strokes);
     }
 
     info.drawing.tag_topology_changed();
@@ -5700,16 +5700,16 @@ static bke::AttributeStorage merge_attributes(const bke::AttributeAccessor &a,
   bke::AttributeStorage new_storage;
   for (const auto &[name, type] : new_types.items()) {
     const CPPType &cpp_type = bke::attribute_type_to_cpp_type(type);
-    auto new_data = bke::Attribute::ArrayData::from_uninitialized(cpp_type, dst_size);
+    GArray<> new_data(cpp_type, dst_size, NoInitialization());
 
     const GVArray data_a = *a.lookup_or_default(name, bke::AttrDomain::Layer, type);
-    data_a.materialize_to_uninitialized(new_data.data);
+    data_a.materialize_to_uninitialized(new_data.data());
 
     const GVArray data_b = *b.lookup_or_default(name, bke::AttrDomain::Layer, type);
     data_b.materialize_to_uninitialized(
-        POINTER_OFFSET(new_data.data, cpp_type.size * domain_size_a));
+        POINTER_OFFSET(new_data.data(), cpp_type.size * domain_size_a));
 
-    new_storage.add(name, bke::AttrDomain::Layer, type, std::move(new_data));
+    new_storage.add(name, bke::AttrDomain::Layer, bke::GList(std::move(new_data)));
   }
 
   return new_storage;

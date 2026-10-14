@@ -8,6 +8,7 @@
 
 #include <cctype>
 #include <cstdint>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -467,8 +468,9 @@ void SourceProcessor::scan_external_symbols(SourceManager &sources,
   for (const auto &dep : metadata_.dependencies) {
     string file;
     for (const auto &filename : file_list_) {
-      if (filename.find(dep) != string::npos) {
+      if (std::filesystem::path(filename).filename() == dep) {
         file = filename;
+        break;
       }
     }
 
@@ -783,10 +785,11 @@ void SourceProcessor::parse_includes(Parser &parser)
     string_view dependency_name = str_view_exclusive(tokens[2]);
 
     if (dependency_name.find("defines.hh") != string::npos ||
-        /* WORKAROUND(fclem): Only needed in EEVEE for now. Needs the file to be in the same
-           folder. */
+        /* WORKAROUND(fclem): Only needed in EEVEE and overlays for now.
+         * Needs the file to be in the same folder. */
         (dependency_name.ends_with(".bsl.hh") && filename.ends_with(".bsl.hh") &&
-         dependency_name.starts_with("eevee_") && filename.starts_with("eevee_")))
+         ((dependency_name.starts_with("eevee_") && filename.starts_with("eevee_")) ||
+          (dependency_name.starts_with("overlay_") && filename.starts_with("overlay_")))))
     {
       /* Dependencies between create infos are not needed for reflections.
        * Only the dependencies on the defines are needed. */
@@ -872,16 +875,16 @@ void SourceProcessor::lower_namesless_parameters(Parser &parser)
     }
     int i = 0;
     tok.scope().foreach_scope(ScopeType::FunctionArg, [&](Scope arg) {
-      if (arg.token_count() == 1 || arg.back().prev() == TokenType::Const || arg.back() == '&' ||
-          arg.back() == '>')
-      {
-        Token back = arg.back();
-        if (back == ']') {
-          back = back.scope().front().prev();
-        }
+      /* Skip array declarator, e.g. `float[4]`. */
+      Token back = arg.back();
+      while (back == ']') {
+        back = back.scope().front().prev();
+      }
+      const bool is_single_token = back.str_index_start() == arg.front().str_index_start();
+      if (is_single_token || back.prev() == TokenType::Const || back == '&' || back == '>') {
         /* Append a name for nameless argument. */
-        parser.replace(arg.back().str_index_last_no_whitespace() + 1,
-                       arg.back().str_index_last(),
+        parser.replace(back.str_index_last_no_whitespace() + 1,
+                       back.str_index_last(),
                        " _" + std::to_string(i++));
       }
     });

@@ -345,8 +345,17 @@ class TOPBAR_MT_file_project(Menu):
     def draw(self, _context):
         layout = self.layout
 
-        layout.operator("project.new_project", text="New Project...", icon='ADD')
-        layout.operator("project.open_blend_in_project", icon='FILE_FOLDER')
+        layout.operator("project.new", text="New...", icon='ADD')
+        layout.operator("project.open", text="Open...", icon='FILE_FOLDER')
+        layout.operator("project.close", text="Close")
+
+        layout.separator()
+
+        if layout.template_recent_projects(rows=10):
+            layout.separator()
+            layout.operator("wm.clear_recent_projects", text="Clear Recent Projects List...", icon='TRASH')
+        else:
+            layout.label(text="No Recent Projects")
 
 
 # Include technical operators here which would otherwise have no way for users to access.
@@ -412,6 +421,9 @@ class TOPBAR_MT_file_import(Menu):
             self.layout.operator(
                 "wm.fbx_import", text=FileHandler.label_with_extensions("IO_FH_fbx"))
 
+        if bpy.app.build_options.opentimelineio:
+            self.layout.operator("wm.otio_import", text="OpenTimelineIO (.otio)")
+
 
 class TOPBAR_MT_file_export(Menu):
     bl_idname = "TOPBAR_MT_file_export"
@@ -451,6 +463,8 @@ class TOPBAR_MT_file_export(Menu):
         if bpy.app.build_options.io_stl:
             self.layout.operator(
                 "wm.stl_export", text=FileHandler.label_with_extensions("IO_FH_stl"))
+        if bpy.app.build_options.opentimelineio:
+            self.layout.operator("wm.otio_export", text="OpenTimelineIO (.otio)")
 
 
 class TOPBAR_MT_file_external_data(Menu):
@@ -595,7 +609,7 @@ class TOPBAR_MT_project(Menu):
     def draw(self, _context):
         layout = self.layout
 
-        layout.operator("screen.project_setup_show", text="Settings...", icon='PREFERENCES')
+        layout.operator("screen.project_settings_show", text="Settings...", icon='PREFERENCES')
 
 
 class TOPBAR_MT_window(Menu):
@@ -728,6 +742,11 @@ class TOPBAR_MT_workspace_menu(Menu):
         layout.separator()
 
         layout.operator("workspace.reorder_to_front", text="Reorder to Front", icon='TRIA_LEFT_BAR')
+        layout.operator("workspace.reorder_to_left_right", text="Reorder to Left", icon='TRIA_LEFT').direction = 'LEFT'
+        layout.operator(
+            "workspace.reorder_to_left_right",
+            text="Reorder to Right",
+            icon='TRIA_RIGHT').direction = 'RIGHT'
         layout.operator("workspace.reorder_to_back", text="Reorder to Back", icon='TRIA_RIGHT_BAR')
 
         layout.separator()

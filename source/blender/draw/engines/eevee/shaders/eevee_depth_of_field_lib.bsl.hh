@@ -11,7 +11,6 @@
 #include "draw_view.bsl.hh"
 #include "eevee_depth_of_field_shared.hh"
 #include "gpu_shader_math_base.bsl.hh"
-#include "gpu_shader_utildefines.bsl.hh"
 
 /* -------------------------------------------------------------------- */
 /** \name Constants.
@@ -105,7 +104,7 @@ float4 dof_bilateral_color_weights(float4 colors[4])
 }
 
 /* Returns signed Circle of confusion radius (in pixel) based on depth buffer value [0..1]. */
-float dof_coc_from_depth([[resource_table]] const draw::View &views,
+float dof_coc_from_depth(const draw::View &views,
                          DepthOfFieldData dof_data,
                          float2 uv,
                          float depth)

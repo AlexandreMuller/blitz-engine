@@ -418,15 +418,13 @@ static struct {
 
   /* TODO: remove. */
   GPUVertFormat format;
-  uint vflag_id;
 } g_ui_batch_cache = {nullptr};
 
 static const GPUVertFormat &vflag_format()
 {
   if (g_ui_batch_cache.format.attr_len == 0) {
     GPUVertFormat *format = &g_ui_batch_cache.format;
-    g_ui_batch_cache.vflag_id = GPU_vertformat_attr_add(
-        format, "vflag", gpu::VertAttrType::UINT_32);
+    GPU_vertformat_attr_add(format, "vflag", gpu::VertAttrType::UINT_32);
   }
   return g_ui_batch_cache.format;
 }
@@ -436,28 +434,16 @@ static const GPUVertFormat &vflag_format()
 #define EMBOSS 2
 #define NO_AA 0
 
-static void set_roundbox_vertex_data(GPUVertBufRaw *vflag_step, uint32_t d)
+static uint32_t roundbox_vertex_data(
+    int corner_id, int corner_v, int jit_v, bool inner, bool emboss, int color)
 {
-  uint32_t *data = static_cast<uint32_t *>(GPU_vertbuf_raw_step(vflag_step));
-  *data = d;
-}
-
-static uint32_t set_roundbox_vertex(GPUVertBufRaw *vflag_step,
-                                    int corner_id,
-                                    int corner_v,
-                                    int jit_v,
-                                    bool inner,
-                                    bool emboss,
-                                    int color)
-{
-  uint32_t *data = static_cast<uint32_t *>(GPU_vertbuf_raw_step(vflag_step));
-  *data = corner_id;
-  *data |= corner_v << 2;
-  *data |= jit_v << 6;
-  *data |= color << 12;
-  *data |= (inner) ? (1 << 10) : 0;  /* is inner vert */
-  *data |= (emboss) ? (1 << 11) : 0; /* is emboss vert */
-  return *data;
+  uint32_t data = corner_id;
+  data |= corner_v << 2;
+  data |= jit_v << 6;
+  data |= color << 12;
+  data |= (inner) ? (1 << 10) : 0;  /* is inner vert */
+  data |= (emboss) ? (1 << 11) : 0; /* is emboss vert */
+  return data;
 }
 
 gpu::Batch *batch_roundbox_widget_get()
@@ -489,32 +475,33 @@ gpu::Batch *batch_roundbox_widget_get()
 gpu::Batch *batch_roundbox_shadow_get()
 {
   if (g_ui_batch_cache.roundbox_shadow == nullptr) {
-    uint32_t last_data;
-    GPUVertBufRaw vflag_step;
     gpu::VertBuf *vbo = GPU_vertbuf_create_with_format(vflag_format());
     const int vcount = (WIDGET_SIZE_MAX + 1) * 2 + 2 + WIDGET_SIZE_MAX;
     GPU_vertbuf_data_alloc(*vbo, vcount);
-    GPU_vertbuf_attr_get_raw_data(vbo, g_ui_batch_cache.vflag_id, &vflag_step);
+    MutableSpan<uint32_t> data = vbo->data<uint32_t>();
+    int i = 0;
 
     for (int c = 0; c < 4; c++) {
       for (int a = 0; a < WIDGET_CURVE_RESOLU; a++) {
-        set_roundbox_vertex(&vflag_step, c, a, NO_AA, true, false, INNER);
-        set_roundbox_vertex(&vflag_step, c, a, NO_AA, false, false, INNER);
+        data[i++] = roundbox_vertex_data(c, a, NO_AA, true, false, INNER);
+        data[i++] = roundbox_vertex_data(c, a, NO_AA, false, false, INNER);
       }
     }
     /* close loop */
-    last_data = set_roundbox_vertex(&vflag_step, 0, 0, NO_AA, true, false, INNER);
-    last_data = set_roundbox_vertex(&vflag_step, 0, 0, NO_AA, false, false, INNER);
+    data[i++] = roundbox_vertex_data(0, 0, NO_AA, true, false, INNER);
+    const uint32_t last_data = roundbox_vertex_data(0, 0, NO_AA, false, false, INNER);
+    data[i++] = last_data;
     /* restart */
-    set_roundbox_vertex_data(&vflag_step, last_data);
-    set_roundbox_vertex(&vflag_step, 0, 0, NO_AA, true, false, INNER);
+    data[i++] = last_data;
+    data[i++] = roundbox_vertex_data(0, 0, NO_AA, true, false, INNER);
     /* filled */
     for (int c1 = 0, c2 = 3; c1 < 2; c1++, c2--) {
       for (int a1 = 0, a2 = WIDGET_CURVE_RESOLU - 1; a2 >= 0; a1++, a2--) {
-        set_roundbox_vertex(&vflag_step, c1, a1, NO_AA, true, false, INNER);
-        set_roundbox_vertex(&vflag_step, c2, a2, NO_AA, true, false, INNER);
+        data[i++] = roundbox_vertex_data(c1, a1, NO_AA, true, false, INNER);
+        data[i++] = roundbox_vertex_data(c2, a2, NO_AA, true, false, INNER);
       }
     }
+    BLI_assert(i == vcount);
     g_ui_batch_cache.roundbox_shadow = GPU_batch_create_ex(
         GPU_PRIM_TRI_STRIP, vbo, nullptr, GPU_BATCH_OWNS_VBO);
     gpu_batch_presets_register(g_ui_batch_cache.roundbox_shadow);
@@ -2929,10 +2916,10 @@ static void widget_draw_multiline_text(const uiFontStyle *fstyle,
 
   float ymax = rect->ymax - padding;
   rcti line_rect = *rect;
-  int sccissors[4];
-  GPU_scissor_get(sccissors);
-  int sccisors_ymin = sccissors[1];
-  int sccisors_ymax = sccisors_ymin + sccissors[3];
+  int scissors[4];
+  GPU_scissor_get(scissors);
+  int scissors_ymin = scissors[1];
+  int scissors_ymax = scissors_ymin + scissors[3];
 
   for (const int i : multiline_label->wrap_cache->wrapped_lines.index_range().take_front(lines)) {
     StringRef line = multiline_label->wrap_cache->wrapped_lines[i];
@@ -2940,11 +2927,11 @@ static void widget_draw_multiline_text(const uiFontStyle *fstyle,
     ymax -= line_height;
     line_rect.ymin = ymax;
     /* Break when there is not more space to draw. */
-    if (line_rect.ymax < sccisors_ymin) {
+    if (line_rect.ymax < scissors_ymin) {
       break;
     }
     /* Skip the line if the line is not in visible bounds. */
-    if (line_rect.ymin > sccisors_ymax) {
+    if (line_rect.ymin > scissors_ymax) {
       continue;
     }
     if (i < (lines - 1) || total_lines == lines) {
@@ -3400,14 +3387,19 @@ static void widget_state(WidgetType *wt, const WidgetStateInfo *state, EmbossTyp
   }
 
   if (state->but_flag & BUT_REDALERT) {
+    uchar red[4];
+    theme::get_color_4ubv(TH_REDALERT, red);
+    /* Alpha is used to blend between the original color (text, background) and alert theme. */
+    const float red_alpha = float(red[3]) / 255.0f;
+
+    /* In regular widgets, tint the background and outline. */
     if (wt->draw && emboss != EmbossType::None) {
-      theme::get_color_3ubv(TH_REDALERT, wt->wcol.inner);
+      color_blend_v3_v3(wt->wcol.outline, red, red_alpha);
+      color_blend_v3_v3(wt->wcol.inner, red, red_alpha);
     }
+    /* Text such as labels or widgets without emboss. Tint the text only. */
     else {
-      uchar red[4];
-      theme::get_color_3ubv(TH_REDALERT, red);
-      color_mul_hsl_v3(red, 1.0f, 1.5f, 1.5f);
-      color_blend_v3_v3(wt->wcol.text, red, 0.5f);
+      color_blend_v3_v3(wt->wcol.text, red, red_alpha);
     }
   }
 
@@ -4993,7 +4985,7 @@ static void widget_swatch(Button *but,
   col[3] *= widget_alpha_factor(state);
 
   widgetbase_draw_color(&wtb, wcol, col, show_alpha_checkers);
-  if (color_but->is_pallete_color &&
+  if (color_but->is_palette_color &&
       (id_cast<Palette *>(but->rnapoin.owner_id))->active_color == color_but->palette_color_index)
   {
     const float width = rect->xmax - rect->xmin;
@@ -5346,9 +5338,12 @@ static void widget_state_label(WidgetType *wt, const WidgetStateInfo *state, Emb
 
   if (state->but_flag & BUT_REDALERT) {
     uchar red[4];
-    theme::get_color_3ubv(TH_REDALERT, red);
-    color_mul_hsl_v3(red, 1.0f, 1.5f, 1.5f);
-    color_blend_v3_v3(wt->wcol.text, red, 0.5f);
+    theme::get_color_4ubv(TH_REDALERT, red);
+
+    /* Alert color's alpha is used to blend between the text and alert tint.
+     * This ensures the text be always readable, lighter or darker depending on the theme. */
+    float red_alpha = float(red[3]) / 255.0f;
+    color_blend_v3_v3(wt->wcol.text, red, red_alpha);
   }
 }
 

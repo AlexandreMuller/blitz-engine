@@ -181,7 +181,7 @@ class TestBlendLibLinkIndirect(TestBlendLibLinkHelper):
         self.assertEqual(material.users, 1)
         self.assertTrue(material.is_library_indirect)
         self.assertEqual(mesh.users, 1)
-        # Now the linked ID is used by a local ID, and is therefore direclty linked.
+        # Now the linked ID is used by a local ID, and is therefore directly linked.
         self.assertFalse(mesh.is_library_indirect)
 
         ob.material_slots[0].link = 'OBJECT'
@@ -197,7 +197,7 @@ class TestBlendLibLinkIndirect(TestBlendLibLinkHelper):
         self.assertEqual(image.users, 1)
         self.assertTrue(image.is_library_indirect)
         self.assertEqual(material.users, 1)
-        # This is not properly updated whene removing a local user of linked data.
+        # This is not properly updated when removing a local user of linked data.
         self.assertFalse(material.is_library_indirect)
 
         output_work_path = os.path.join(output_dir, self.unique_blendfile_name("blendfile"))
@@ -500,7 +500,7 @@ class TestBlendLibAppendCollectionInstances(TestBlendLibLinkHelper):
         for item in expected_list:
             self.assertTrue(item in actual_list, f"Could not find {item}")
 
-    def test_dependency_instatiation(self):
+    def test_dependency_instantiation(self):
         # Append collection instances (see issue #154707)
         self.reset_blender()
 
@@ -524,7 +524,7 @@ class TestBlendLibAppendCollectionInstances(TestBlendLibLinkHelper):
         self.assert_contains_all(
             bpy.data.collections["Coll_154707_Data"].all_objects, ["Plane_A", "Plane_B"])
 
-    def test_recusive_instantiation(self):
+    def test_recursive_instantiation(self):
         # Append collection instances (see issue #155006)
         self.reset_blender()
 
@@ -694,7 +694,7 @@ class TestBlendLibPackedLinkedID(TestBlendLibLinkHelper):
         bpy.data.scenes[0].collection.objects.link(ob_packed)
 
         self.assertEqual(len(bpy.data.libraries), 4)
-        # Due to ID name sorting, the newly ceratedt archive library should be second now, after its parent one.
+        # Due to ID name sorting, the newly created archive library should be second now, after its parent one.
         archive_library = bpy.data.libraries[1]
 
         def check_valid():

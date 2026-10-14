@@ -478,7 +478,6 @@ static void mesh_blend_read_data(BlendDataReader *reader, ID *id)
   CustomData_blend_read(reader, &mesh->fdata_legacy, mesh->totface_legacy);
   CustomData_blend_read(reader, &mesh->corner_data, mesh->corners_num);
   CustomData_blend_read(reader, &mesh->face_data, mesh->faces_num);
-  mesh->attribute_storage.wrap().blend_read(*reader);
   if (mesh->deform_verts().is_empty()) {
     /* Vertex group data was also an owning pointer in old Blender versions.
      * Don't read them again if they were read as part of #CustomData. */
@@ -506,6 +505,10 @@ static void mesh_blend_read_data(BlendDataReader *reader, ID *id)
                      nullptr;
         });
   }
+
+  mesh->attribute_storage.wrap().blend_read(*reader, [&](const bke::AttrDomain domain) {
+    return mesh->attributes().domain_size(domain);
+  });
 
   if (mesh->mselect == nullptr) {
     mesh->totselect = 0;
@@ -2062,15 +2065,6 @@ const VectorSet<int> &Mesh::material_indices_used() const
 
 namespace bke {
 
-static void translate_positions(MutableSpan<float3> positions, const float3 &translation)
-{
-  threading::parallel_for(positions.index_range(), 2048, [&](const IndexRange range) {
-    for (float3 &position : positions.slice(range)) {
-      position += translation;
-    }
-  });
-}
-
 void mesh_translate(Mesh &mesh, const float3 &translation, const bool do_shape_keys)
 {
   if (math::is_zero(translation)) {
@@ -2082,11 +2076,11 @@ void mesh_translate(Mesh &mesh, const float3 &translation, const bool do_shape_k
     bounds = mesh.runtime->bounds_cache.data();
   }
 
-  translate_positions(mesh.vert_positions_for_write(), translation);
+  math::translate_points(mesh.vert_positions_for_write(), translation);
 
   if (do_shape_keys && mesh.key) {
     for (KeyBlock &kb : mesh.key->block) {
-      translate_positions({static_cast<float3 *>(kb.data), kb.totelem}, translation);
+      math::translate_points({static_cast<float3 *>(kb.data), kb.totelem}, translation);
     }
   }
 

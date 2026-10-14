@@ -22,10 +22,12 @@
 
 namespace subdiv {
 
-/* ------------------------------------------------------------------------------
- * Patch Coordinate lookup. Return an #OsdPatchCoord for the given patch_index and UVs.
+/* -------------------------------------------------------------------- */
+/** \name Patch Coordinate Lookup
+ *
+ * Return an #OsdPatchCoord for the given patch_index and UVs.
  * This code is a port of the #OpenSubdiv PatchMap lookup code.
- */
+ * \{ */
 
 PatchHandle bogus_patch_handle()
 {
@@ -151,10 +153,12 @@ struct PatchEval {
 
   float3 read_vec3_extra(int index) const
   {
-    float3 result;
-    result.x = srcExtraVertexBuffer[index * 3];
-    result.y = srcExtraVertexBuffer[index * 3 + 1];
-    result.z = srcExtraVertexBuffer[index * 3 + 2];
+    float3 result = float3(0);
+    if (consts.do_orcos) [[static_branch]] {
+      result.x = srcExtraVertexBuffer[index * 3];
+      result.y = srcExtraVertexBuffer[index * 3 + 1];
+      result.z = srcExtraVertexBuffer[index * 3 + 2];
+    }
     return result;
   }
 
@@ -295,9 +299,9 @@ struct PatchEval {
 
 /** \} */
 
-/* ------------------------------------------------------------------------------
- * Face Varying (UVs).
- */
+/* -------------------------------------------------------------------- */
+/** \name Face Varying (UVs)
+ * \{ */
 
 struct FvarEval {
   [[storage(PATCH_EVALUATION_OUTPUT_FVAR_BUF_SLOT, write)]] packed_float2 (&fvar_buf)[];
@@ -331,9 +335,9 @@ void patch_eval_fvar([[resource_table]] const SubdivResources &srt,
 
 /** \} */
 
-/* ------------------------------------------------------------------------------
- * Face Dots.
- */
+/* -------------------------------------------------------------------- */
+/** \name Face Dots
+ * \{ */
 
 struct FdotsConsts {
   [[compilation_constant]] bool do_normals;
@@ -432,9 +436,9 @@ void patch_eval_fdots([[resource_table]] const SubdivResources &srt,
 
 /** \} */
 
-/* ------------------------------------------------------------------------------
- * Vertices.
- */
+/* -------------------------------------------------------------------- */
+/** \name Vertices
+ * \{ */
 
 struct VertsEval {
   [[resource_table]] PatchEvalConsts constants;

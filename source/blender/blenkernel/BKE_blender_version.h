@@ -20,9 +20,9 @@ namespace blender {
  */
 
 /** Blender major and minor version. */
-#define BLENDER_VERSION 503
+#define BLENDER_VERSION 504
 
-#define UPBGE_VERSION 53
+#define UPBGE_VERSION 54
 
 /** Blender patch version for bug-fix releases. */
 #define BLENDER_VERSION_PATCH 0
@@ -37,7 +37,7 @@ namespace blender {
 
 /* Blender file format version. */
 #define BLENDER_FILE_VERSION BLENDER_VERSION
-#define BLENDER_FILE_SUBVERSION 25
+#define BLENDER_FILE_SUBVERSION 3
 
 /* UPBGE file format version. */
 #define UPBGE_FILE_VERSION UPBGE_VERSION

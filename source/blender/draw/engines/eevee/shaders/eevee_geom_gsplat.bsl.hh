@@ -58,15 +58,15 @@ namespace eevee {
 
   init_interface(interp, id.raw_id);
 
-  /* TODO(not_mark): Disabled compute pass for now, due to incompatibility with instancing. */
-  /* draw::gsplat::SplatShape gs;
+  draw::gsplat::SplatShape gs;
   if (pipe.is_shadow_pipe) [[static_branch]] {
-    gs = shape.get_splat_fallback(uint(vert_id), obj, view);
+    const float2 shadow_viewport_size = float2(
+        shadow_viewport_size_get(shadow.render_view_buf[view_id].viewport_index));
+    gs = shape.get_splat(uint(vert_id), obj, view, shadow_viewport_size);
   }
   else {
     gs = shape.get_splat(uint(vert_id), obj, view);
-  } */
-  draw::gsplat::SplatShape gs = shape.get_splat(uint(vert_id), obj, view);
+  }
   if (gs.is_culled()) {
     out_position = float4(NAN_FLT);
     return;
@@ -107,7 +107,7 @@ namespace eevee {
   /* Compute Original Coordinate (ORCO). */
   float3 lP_orco = gs.mean * ob_infos.orco_mul + ob_infos.orco_add;
 
-  [[maybe_unused]] ShadingData sd = init_globals(uni, interp, view, true, float4(0));
+  [[maybe_unused]] ShadingData sd = init_globals(pipe, uni, interp, view, true, float4(0));
 
   attrib_load(PointCloudPoint{gs.mean, int(gs.id), lP_orco});
 

@@ -38,6 +38,7 @@ set(SRC
   intern/versioning_501.cc
   intern/versioning_502.cc
   intern/versioning_503.cc
+  intern/versioning_504.cc
   intern/versioning_common.cc
   intern/versioning_defaults.cc
   intern/versioning_dna.cc
@@ -143,6 +144,7 @@ if(WITH_GTESTS)
   # Actual `blenloader` tests.
   set(TEST_SRC
     tests/blendfile_load_test.cc
+    tests/sdna_encode_subset_test.cc
   )
   set(TEST_LIB
     ${LIB}

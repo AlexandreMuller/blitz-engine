@@ -6,7 +6,6 @@
 
 #include "gpu_shader_material_interface.bsl.hh"
 #include "gpu_shader_math_vector_safe.bsl.hh"
-#include "gpu_shader_utildefines.bsl.hh"
 
 [[node]]
 void node_bsdf_glossy(float4 color,
@@ -17,7 +16,7 @@ void node_bsdf_glossy(float4 color,
                       float3 /*T*/, /* Unsupported. */
                       float weight,
                       const float do_multiscatter,
-                      [[resource_table]] KernelGlobals &kg,
+                      KernelGlobals &kg,
                       ShadingData &sd,
                       Closure &result)
 {
@@ -36,5 +35,5 @@ void node_bsdf_glossy(float4 color,
   reflection_data.N = N;
   reflection_data.roughness = roughness;
 
-  result = closure_eval(sd, reflection_data);
+  result = closure_eval(kg, sd, reflection_data);
 }

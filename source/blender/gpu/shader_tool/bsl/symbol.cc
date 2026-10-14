@@ -249,6 +249,9 @@ struct SymbolParser : NodeErrorHandler {
         case ResourceType::FRAG_COORD:
           var->identifier = "gl_FragCoord";
           break;
+        case ResourceType::BARY_COORD:
+          var->identifier = "gpu_BaryCoord";
+          break;
         case ResourceType::STENCIL_REF:
           var->identifier = "gl_FragStencilRefARB";
           break;
@@ -346,6 +349,14 @@ struct SymbolParser : NodeErrorHandler {
                attr.res_type != ResourceType::RESOURCE_TABLE)
       {
         error(arg, Diag::ResourceAttributesOnlyOnEntryPointArgs);
+      }
+
+      if (!is_entry_point && attr.condition.is_valid()) {
+        error(arg, Diag::ConditionAttributeNotOnResource);
+      }
+
+      if (attr.condition.is_valid()) {
+        var->condition = attr.condition;
       }
     }
 
@@ -566,7 +577,9 @@ struct SymbolParser : NodeErrorHandler {
 
     scope.scopes.emplace(cls->identifier, cls);
 
-    if (cls->is_anonymous && anonymous_scope_prefix(cls).non_anonymous_parent == nullptr) {
+    if (!cls->is_enum && cls->is_anonymous &&
+        anonymous_scope_prefix(cls).non_anonymous_parent == nullptr)
+    {
       error(decl, Diag::AnonymousUnionNotSupportedAtNamespaceScope);
       return table.err_cls;
     }
@@ -602,18 +615,18 @@ struct SymbolParser : NodeErrorHandler {
     }
     else {
       cls->ensure_size_and_align();
-    }
 
-    if (cls->is_anonymous) {
-      /* Instantiate into parent class as member. */
-      SymbolVariable *var = table.var_arena.alloc(
-          &scope, cls, decl.front(), cls->original + ns_sep);
-      if (scope.variable_emplace(cls->original, var)) {
-        error(var->loc.tok, Diag::Redefinition, cls->original);
+      if (cls->is_anonymous) {
+        /* Instantiate into parent class as member. */
+        SymbolVariable *var = table.var_arena.alloc(
+            &scope, cls, decl.front(), cls->original + ns_sep);
+        if (scope.variable_emplace(cls->original, var)) {
+          error(var->loc.tok, Diag::Redefinition, cls->original);
+        }
+
+        var->type = cls;
+        var->set_offset(parent_class.is_union(), offset);
       }
-
-      var->type = cls;
-      var->set_offset(parent_class.is_union(), offset);
     }
     return cls;
   }
@@ -1016,6 +1029,15 @@ struct SymbolParser : NodeErrorHandler {
       error(var, Diag::ResourceOutOfClassDeclaration);
     }
 
+    if (attr.condition.is_valid()) {
+      if (attr.res_type == ResourceType::NONE) {
+        error(var, Diag::ConditionAttributeNotOnResource);
+      }
+      else if (attr.res_type == ResourceType::SHARED) {
+        error(var, Diag::ConditionAttributeUnsupported, to_str(attr.res_type));
+      }
+    }
+
     const bool is_srt_local_ref = type->is_srt() && cls == nullptr;
 
     string anon_prefix;
@@ -1055,6 +1077,10 @@ struct SymbolParser : NodeErrorHandler {
         }
         /* TODO(fclem): Check that this references a single reachable compilation constant. */
         sym->capacity_value = attr.capacity;
+      }
+
+      if (attr.condition.is_valid()) {
+        sym->condition = attr.condition;
       }
 
       /* Local References. */

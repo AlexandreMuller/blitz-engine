@@ -51,6 +51,7 @@
 #include "BKE_object.hh"
 #include "BKE_report.hh"
 #include "BKE_scene.hh"
+#include "BKE_scene_context.hh"
 #include "BKE_screen.hh"
 #include "BKE_sound.hh"
 #include "BKE_workspace.hh"
@@ -3894,8 +3895,7 @@ static int wrap_frame_in_range(const int frame, const ScenePlaybackRange &range)
 /* function to be called outside UI context, or for redo */
 static wmOperatorStatus frame_offset_exec(bContext *C, wmOperator *op)
 {
-  const bool is_sequencer = CTX_wm_space_seq(C) != nullptr;
-  Scene *scene = is_sequencer ? CTX_data_sequencer_scene(C) : CTX_data_scene(C);
+  Scene *scene = bke::scene_or_sequencer_scene_from_context(*C);
   if (!scene) {
     return OPERATOR_CANCELLED;
   }
@@ -3955,8 +3955,7 @@ static void SCREEN_OT_frame_offset(wmOperatorType *ot)
 /* function to be called outside UI context, or for redo */
 static wmOperatorStatus frame_jump_exec(bContext *C, wmOperator *op)
 {
-  const bool is_sequencer = CTX_wm_space_seq(C) != nullptr;
-  Scene *scene = is_sequencer ? CTX_data_sequencer_scene(C) : CTX_data_scene(C);
+  Scene *scene = bke::scene_or_sequencer_scene_from_context(*C);
   if (!scene) {
     return OPERATOR_CANCELLED;
   }
@@ -4357,8 +4356,7 @@ static std::optional<int> get_first_marker_in_range(const ScenePlaybackRange pla
 /* function to be called outside UI context, or for redo */
 static wmOperatorStatus marker_jump_exec(bContext *C, wmOperator *op)
 {
-  const bool is_sequencer = CTX_wm_space_seq(C) != nullptr;
-  Scene *scene = is_sequencer ? CTX_data_sequencer_scene(C) : CTX_data_scene(C);
+  Scene *scene = bke::scene_or_sequencer_scene_from_context(*C);
   if (!scene) {
     return OPERATOR_CANCELLED;
   }
@@ -6957,8 +6955,7 @@ static wmOperatorStatus start_playback(bContext *C, int sync, int mode)
   Main *bmain = CTX_data_main(C);
   bScreen *screen = CTX_wm_screen(C);
 
-  const bool is_sequencer = CTX_wm_space_seq(C) != nullptr;
-  Scene *scene = is_sequencer ? CTX_data_sequencer_scene(C) : CTX_data_scene(C);
+  Scene *scene = bke::scene_or_sequencer_scene_from_context(*C);
   if (!scene) {
     return OPERATOR_CANCELLED;
   }
@@ -6972,6 +6969,7 @@ static wmOperatorStatus start_playback(bContext *C, int sync, int mode)
    * sound playback below have run. */
   const int frame_before_loop_jump = scene->r.cfra;
 
+  const bool is_sequencer = CTX_wm_space_seq(C) != nullptr;
   ViewLayer *view_layer = is_sequencer ? BKE_view_layer_default_render(scene) :
                                          CTX_data_view_layer(C);
 
@@ -7049,14 +7047,14 @@ std::optional<PreScrubbingState> ED_screen_scrubbing_enable(bContext &C, bScreen
     return std::nullopt;
   }
 
-  /* Only continue if playback is running in this screen, so scrubbing in
-   * another screen does not interrupt playback. See #164040. */
-  if (play_screen != &screen) {
+  const ScreenAnimData *sad = static_cast<ScreenAnimData *>(play_screen->animtimer->customdata);
+  if (sad == nullptr) {
     return std::nullopt;
   }
 
-  const ScreenAnimData *sad = static_cast<ScreenAnimData *>(play_screen->animtimer->customdata);
-  if (sad == nullptr) {
+  /* Only pause playback of the scrubbed scene, so scrubbing another scene does
+   * not interrupt playback. */
+  if (sad->scene != bke::scene_or_sequencer_scene_from_context(C)) {
     return std::nullopt;
   }
 
@@ -7406,10 +7404,10 @@ static void SCREEN_OT_userpref_show(wmOperatorType *ot)
 /** \} */
 
 /* -------------------------------------------------------------------- */
-/** \name Show Project Setup Operator
+/** \name Show Project Settings Operator
  * \{ */
 
-static wmOperatorStatus project_setup_show_exec(bContext *C, wmOperator *op)
+static wmOperatorStatus project_settings_show_exec(bContext *C, wmOperator *op)
 {
   /* changes context! */
   if (ScrArea *area = ED_screen_temp_space_open(
@@ -7429,7 +7427,8 @@ static wmOperatorStatus project_setup_show_exec(bContext *C, wmOperator *op)
       RNA_property_string_get(op->ptr, prop, section_name);
       ARegion *region_props = BKE_area_find_region_type(area, RGN_TYPE_WINDOW);
       if (region_props) {
-        ui::panel_category_active_set_default(region_props, section_name);
+        ui::panel_category_active_set(region_props, section_name);
+        ED_area_tag_redraw(area);
       }
     }
 
@@ -7439,17 +7438,17 @@ static wmOperatorStatus project_setup_show_exec(bContext *C, wmOperator *op)
   return OPERATOR_CANCELLED;
 }
 
-static void SCREEN_OT_project_setup_show(wmOperatorType *ot)
+static void SCREEN_OT_project_settings_show(wmOperatorType *ot)
 {
   PropertyRNA *prop;
 
   /* identifiers */
-  ot->name = "Open Project Setup...";
+  ot->name = "Open Project Settings...";
   ot->description = "Create and manage projects";
-  ot->idname = "SCREEN_OT_project_setup_show";
+  ot->idname = "SCREEN_OT_project_settings_show";
 
   /* API callbacks. */
-  ot->exec = project_setup_show_exec;
+  ot->exec = project_settings_show_exec;
   ot->poll = ED_operator_screenactive_nobackground; /* Not in background as this opens a window. */
 
   prop = RNA_def_string(ot->srna,
@@ -7457,7 +7456,7 @@ static void SCREEN_OT_project_setup_show(wmOperatorType *ot)
                         "General",
                         MAX_NAME,
                         "Active Section",
-                        "Section to activate in Project Setup");
+                        "Section to activate in Project Settings");
   RNA_def_property_flag(prop, PROP_HIDDEN);
 }
 
@@ -8072,7 +8071,7 @@ void ED_operatortypes_screen()
   WM_operatortype_append(SCREEN_OT_screenshot);
   WM_operatortype_append(SCREEN_OT_screenshot_area);
   WM_operatortype_append(SCREEN_OT_userpref_show);
-  WM_operatortype_append(SCREEN_OT_project_setup_show);
+  WM_operatortype_append(SCREEN_OT_project_settings_show);
   WM_operatortype_append(SCREEN_OT_drivers_editor_show);
   WM_operatortype_append(SCREEN_OT_info_log_show);
   WM_operatortype_append(SCREEN_OT_region_blend);

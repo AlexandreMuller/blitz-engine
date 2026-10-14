@@ -6,7 +6,6 @@
 
 #include "gpu_shader_material_interface.bsl.hh"
 #include "gpu_shader_math_vector_safe.bsl.hh"
-#include "gpu_shader_utildefines.bsl.hh"
 
 [[node]]
 void node_eevee_specular(float4 diffuse,
@@ -20,7 +19,7 @@ void node_eevee_specular(float4 diffuse,
                          float3 CN,
                          float weight,
                          const float use_clearcoat,
-                         [[resource_table]] KernelGlobals &kg,
+                         KernelGlobals &kg,
                          ShadingData &sd,
                          Closure &result)
 {
@@ -70,13 +69,13 @@ void node_eevee_specular(float4 diffuse,
   }
 
   if (use_clearcoat != 0.0f) {
-    result = closure_eval(sd, diffuse_data, reflection_data, clearcoat_data);
+    result = closure_eval(kg, sd, diffuse_data, reflection_data, clearcoat_data);
   }
   else {
-    result = closure_eval(sd, diffuse_data, reflection_data);
+    result = closure_eval(kg, sd, diffuse_data, reflection_data);
   }
-  Closure emission_cl = closure_eval(sd, emission_data);
-  Closure transparency_cl = closure_eval(sd, transparency_data);
+  Closure emission_cl = closure_eval(kg, sd, emission_data);
+  Closure transparency_cl = closure_eval(kg, sd, transparency_data);
   result = closure_add(result, emission_cl);
   result = closure_add(result, transparency_cl);
 }
