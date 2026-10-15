@@ -127,7 +127,7 @@ static void update_game_particle_systems(Depsgraph *depsgraph, Scene *scene, KX_
       continue;
     }
 
-    for (ParticleSystem *psys_orig = static_cast<ParticleSystem *>(ob_orig->particlesystem.first);
+    for (ParticleSystem *psys_orig = static_cast<ParticleSystem *>(ob_orig->particlesystem.first_);
          psys_orig;
          psys_orig = static_cast<ParticleSystem *>(psys_orig->next))
     {
@@ -150,7 +150,7 @@ static void update_game_particle_systems(Depsgraph *depsgraph, Scene *scene, KX_
       }
 
       ParticleSystem *psys_eval = nullptr;
-      for (ParticleSystem *psys = static_cast<ParticleSystem *>(ob_eval->particlesystem.first);
+      for (ParticleSystem *psys = static_cast<ParticleSystem *>(ob_eval->particlesystem.first_);
            psys;
            psys = static_cast<ParticleSystem *>(psys->next))
       {
@@ -936,7 +936,7 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
      * every frame so that update_game_particle_systems() can advance the
      * simulation independently of the timeline. */
     if (ob && !BLI_listbase_is_empty(&ob->particlesystem)) {
-      for (ParticleSystem *psys = static_cast<ParticleSystem *>(ob->particlesystem.first);
+      for (ParticleSystem *psys = static_cast<ParticleSystem *>(ob->particlesystem.first_);
            psys;
            psys = static_cast<ParticleSystem *>(psys->next))
       {

@@ -56,7 +56,10 @@ struct [[host_shared]] ShadowSceneData {
   int pcf_curve_mode;
   /* Tension for the CARDINAL curve. Unused for LINEAR and EASE. */
   float pcf_curve_tension;
-  int _pad0[2];
+  /* Pad to 16 bytes without using an int array (std140 gives scalar arrays a
+   * 16-byte element stride, which the shader layout validator rejects). */
+  int _pad0;
+  int _pad1;
 };
 
 struct [[host_shared]] SceneData {

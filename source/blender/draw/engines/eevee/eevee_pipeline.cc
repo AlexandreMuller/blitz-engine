@@ -1060,9 +1060,12 @@ void DeferredLayer::end_sync(bool is_first_pass,
         gpu::Shader *sh = inst_.shaders.static_shader_get(SHADOW_DENOISE_TEMPORAL);
         pass.specialize_constant(sh, "closure_count", closure_count);
         pass.shader_set(sh);
-        pass.bind_texture("direct_radiance_1_tx", &direct_radiance_txs_[0]);
-        pass.bind_texture("direct_radiance_2_tx", &direct_radiance_txs_[1]);
-        pass.bind_texture("direct_radiance_3_tx", &direct_radiance_txs_[2]);
+        /* UPBGE: Upstream merged the 3 direct radiance textures into a single array texture.
+         * Create per-layer 2D views for the denoise passes. */
+        direct_radiance_txs_.ensure_layer_views();
+        pass.bind_texture("direct_radiance_1_tx", direct_radiance_txs_.layer_view(0));
+        pass.bind_texture("direct_radiance_2_tx", direct_radiance_txs_.layer_view(1));
+        pass.bind_texture("direct_radiance_3_tx", direct_radiance_txs_.layer_view(2));
         pass.bind_texture("depth_tx", &rbuffers.depth_tx);
         pass.bind_texture("vector_tx", &rbuffers.vector_tx);
         pass.bind_texture("history_tx", &shadow_history_txs_[shadow_history_index_]);
@@ -1084,9 +1087,9 @@ void DeferredLayer::end_sync(bool is_first_pass,
         pass.shader_set(sh);
         pass.bind_texture("history_tx", &shadow_history_txs_[shadow_history_index_ ^ 1]);
         pass.bind_texture("depth_tx", &rbuffers.depth_tx);
-        pass.bind_image("direct_radiance_1_img", &direct_radiance_txs_[0]);
-        pass.bind_image("direct_radiance_2_img", &direct_radiance_txs_[1]);
-        pass.bind_image("direct_radiance_3_img", &direct_radiance_txs_[2]);
+        pass.bind_image("direct_radiance_1_img", direct_radiance_txs_.layer_view(0));
+        pass.bind_image("direct_radiance_2_img", direct_radiance_txs_.layer_view(1));
+        pass.bind_image("direct_radiance_3_img", direct_radiance_txs_.layer_view(2));
         pass.bind_resources(inst_.gbuffer);
         pass.dispatch(&shadow_denoise_dispatch_size_);
         pass.barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS | GPU_BARRIER_TEXTURE_FETCH);

@@ -97,7 +97,7 @@ float shadow_receiver_distance(LightData light, const bool is_directional, float
     float3 lP = light_world_to_local_direction(light, P);
     return -lP.z - orderedIntBitsToFloat(light.clip_near);
   }
-  float3 shadow_position = light.local().local.shadow_position;
+  float3 shadow_position = light.local.local.shadow_position;
   float3 lP = light_world_to_local_point(light, P);
   lP -= shadow_position;
   return length(lP);
@@ -668,8 +668,8 @@ float shadow_eval(ShadowRenderData &srd,
     /* Deterministic center: no per-frame random jitter, so shadows stay stable
      * without TAA. A tiny sub-texel jitter based on pixel position breaks
      * residual regular patterns. */
-    float2 pcf_rnd = float2(interleaved_gradient_noise(frag_co, 0.0f, 0.0f),
-                            interleaved_gradient_noise(frag_co, 1.0f, 0.0f));
+    float2 pcf_rnd = float2(random::interleaved_gradient(frag_co, 0.0f, 0.0f),
+                            random::interleaved_gradient(frag_co, 1.0f, 0.0f));
     float3 P_center = P_biased + (texel_radius * 0.05f) * shadow_pcf_offset(L, Ng, pcf_rnd);
 
     /* Etapa 1: delimitacao da sombra -> kernel_radius via semelhanca de triangulos (Eq. 1). */
@@ -685,10 +685,10 @@ float shadow_eval(ShadowRenderData &srd,
       float d_or = max(0.0f, receiver_dist - d_lo);
       float penumbra;
       if (is_directional) {
-        penumbra = d_or * tan(light.sun().shadow_angle);
+        penumbra = d_or * tan(light.sun.shadow_angle);
       }
       else {
-        penumbra = light.local().local.shadow_radius * d_or / max(d_lo, 1e-5f);
+        penumbra = light.local.local.shadow_radius * d_or / max(d_lo, 1e-5f);
       }
       /* light_radius_scale is only a minimum-width floor for the penumbra, not a
        * multiplier: scaling the kernel here would make distant taps still straddle the

@@ -13,6 +13,7 @@
 #include "eevee_renderpass.bsl.hh"
 #include "gpu_shader_fullscreen.bsl.hh"
 #include "gpu_shader_shared_exponent.bsl.hh"
+#include "gpu_shader_utildefines.bsl.hh"
 
 namespace eevee::deferred {
 
@@ -76,7 +77,7 @@ struct Combine {
                                        float3 center_N,
                                        float3 center_P) const
   {
-    float2 extent_inv = 1.0f / float2(textureSize(direct_radiance_1_tx, 0).xy);
+    float2 extent_inv = 1.0f / float2(textureSize(direct_radiance_txs, 0).xy);
     float gauss = filters::gaussian_factor(1.5f, 1.0f);
 
     float3 radiance_accum = load_radiance_direct(texel, bin);
@@ -88,7 +89,7 @@ struct Combine {
           continue;
         }
         int2 sample_texel = texel + int2(x, y);
-        if (!in_texture_range(sample_texel, direct_radiance_1_tx)) {
+        if (!in_texture_range(sample_texel, direct_radiance_txs)) {
           continue;
         }
         ClosureUndetermined sample_cl = reader.read_bin(sample_texel, bin);

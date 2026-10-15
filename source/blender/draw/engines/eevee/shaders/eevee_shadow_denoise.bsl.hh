@@ -35,10 +35,10 @@
 #include "eevee_gbuffer_read.bsl.hh"
 #include "eevee_reverse_z_lib.bsl.hh"
 #include "eevee_velocity.bsl.hh"
-#include "gpu_shader_math_base_lib.glsl"
-#include "gpu_shader_math_vector_lib.glsl"
-#include "gpu_shader_shared_exponent_lib.glsl"
-#include "gpu_shader_utildefines_lib.glsl"
+#include "gpu_shader_math_base.bsl.hh"
+#include "gpu_shader_math_safe.bsl.hh"
+#include "gpu_shader_shared_exponent.bsl.hh"
+#include "gpu_shader_utildefines.bsl.hh"
 
 namespace eevee::shadow::denoise {
 
@@ -67,7 +67,7 @@ struct DenoiseTemporal {
 
   [[image(0, write, SFLOAT_16_16_16_16)]] image2DArray out_history_img;
 
-  [[resource_table]] srt_t<CameraVelocity> camera;
+  [[resource_table]] CameraVelocity camera;
 
   float3 load_radiance_direct(int2 texel, int bin) const
   {
