@@ -44,6 +44,7 @@
 
 #include "BLI_rect.hh"
 #include "DNA_scene_types.h"
+#include "DRW_render.hh"
 #include "../draw/intern/draw_command.hh"
 #include "GPU_immediate.hh"
 #include "GPU_viewport.hh"
@@ -870,6 +871,12 @@ void KX_KetsjiEngine::Render()
   else {
     EndFrameViewportRender();
   }
+
+  /* UPBGE: dump game render profile averages every N frames.
+   * No-op unless BGE_RENDER_PROFILE=1 is set in the environment. */
+  DRWGameProfileStats &game_profile = DRW_game_profile_get();
+  game_profile.camera_passes = pass;
+  game_profile.dump_frame();
 }
 
 void KX_KetsjiEngine::RequestExit(KX_ExitRequest exitrequestmode)

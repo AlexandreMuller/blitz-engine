@@ -10,6 +10,8 @@
 
 #pragma once
 
+#include <chrono>
+#include <cstdio>
 #include <functional>
 
 #include "BKE_mesh_wrapper.hh"
@@ -478,6 +480,89 @@ void DRW_game_render_loop(struct bContext *C,
                           bool is_overlay_pass);
 
 void DRW_game_python_loop_end(struct ViewLayer *view_layer);
+
+/* Game render loop instrumentation (UPBGE/Blitz-Engine).
+ * Enabled with env var BGE_RENDER_PROFILE=1. Timings are accumulated per game frame
+ * and dumped as averages every `dump_interval` frames. All accumulation is a no-op
+ * when disabled (single bool check). */
+struct DRWGameProfileStats {
+  bool enabled = false;
+  /* Optional log file. Set when BGE_RENDER_PROFILE is a file path instead of a boolean.
+   * The game runtime may re-attach stdout to a console, so writing to our own file is
+   * the only reliable capture. Null means stdout. */
+  FILE *log_file = nullptr;
+  int frame_count = 0;
+  int dump_interval = 60;
+  int samples_per_frame = 0;
+  int camera_passes = 0;
+  /* draw_context.cc: DRW_game_render_loop. */
+  float t_acquire = 0.0f;
+  float t_sync = 0.0f;
+  float t_draw = 0.0f;
+  float t_release = 0.0f;
+  /* engines_init_and_sync() breakdown. */
+  float t_sync_init_begin = 0.0f;
+  float t_sync_objects = 0.0f;
+  float t_sync_end = 0.0f;
+  /* eevee_instance.cc. */
+  float t_eevee_init = 0.0f;
+  float t_eevee_begin_sync = 0.0f;
+  float t_eevee_object_sync = 0.0f;
+  float t_eevee_end_sync = 0.0f;
+  /* eevee render_sample(). */
+  float t_rs_probes = 0.0f;
+  float t_rs_main_view = 0.0f;
+  float t_rs_misc = 0.0f;
+  /* KX_Scene.cpp RenderAfterCameraSetup(). */
+  float t_kx_tag_loop = 0.0f;
+  float t_kx_tag_eval = 0.0f;
+  float t_kx_depsgraph = 0.0f;
+  float t_kx_2dfilter_blit = 0.0f;
+  int64_t n_objects_iter = 0;
+  int64_t n_objects_populated = 0;
+  int64_t n_kx_objects = 0;
+  /* Fase 2c: frustum culling potential (objects inside/outside camera frustum). */
+  int64_t n_frustum_in = 0;
+  int64_t n_frustum_out = 0;
+  /* Fase 2c: last computed shadow expand (meters). Negative = culling disabled. */
+  float shadow_expand = -1.0f;
+  /* How many lamps EEVEE's object_sync actually receives per frame (Fase 2c diagnostics). */
+  int64_t n_eevee_synced_lights = 0;
+
+  void reset_frame();
+  void dump_frame();
+};
+
+DRWGameProfileStats &DRW_game_profile_get();
+
+/* RAII scoped timer: accumulates seconds into `dest` on scope exit.
+ * When `enabled` is false, timings are written to a throwaway slot (near-zero cost). */
+class DRWGameProfileTimer {
+ public:
+  DRWGameProfileTimer(bool enabled, float &dest)
+      : dest_(enabled ? dest : dummy_dest()), t0_(std::chrono::steady_clock::now())
+  {
+  }
+  explicit DRWGameProfileTimer(float &dest)
+      : dest_(dest), t0_(std::chrono::steady_clock::now())
+  {
+  }
+  ~DRWGameProfileTimer()
+  {
+    dest_ += std::chrono::duration<float>(std::chrono::steady_clock::now() - t0_).count();
+  }
+
+ private:
+  static float &dummy_dest()
+  {
+    static float dummy = 0.0f;
+    return dummy;
+  }
+  float &dest_;
+  std::chrono::steady_clock::time_point t0_;
+};
+
+#define DRW_PROFILE_SCOPE(dest) DRWGameProfileTimer _drw_profile_timer(dest)
 void DRW_game_viewport_render_loop_end();
 void DRW_transform_to_display_image_render(gpu::Texture *tex);
 

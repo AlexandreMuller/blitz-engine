@@ -52,7 +52,11 @@ std::string KX_GetPythonCode(blender::Main *bmain, const std::string &python_mai
   blender::Text *text = (blender::Text *)BLI_findstring(&bmain->texts, python_main.c_str(), offsetof(blender::ID, name) + 2);
   if (text) {
     size_t buf_len_dummy;
-    return txt_to_buf(text, &buf_len_dummy);
+    char *buf = txt_to_buf(text, &buf_len_dummy);
+    std::string code(buf);
+    /* txt_to_buf allocates with MEM_new_array_uninitialized. */
+    MEM_delete(buf);
+    return code;
   }
 
   return "";

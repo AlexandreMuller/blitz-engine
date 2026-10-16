@@ -1631,6 +1631,16 @@ int main(int argc,
             CTX_wm_manager_set(C, wm);
             CTX_wm_window_set(C, win);
             InitBlenderContextVariables(C);
+            if (first_time_window) {
+              /* UI styles/fonts must be initialized before WM_check(): screen initialization
+               * (ED_area_init -> asset shelf region prefsize) queries ui::style_get_dpi(),
+               * which dereferences U.uistyles that is still empty on the first launch. */
+              WM_init_gpu_offscreen();
+              blender::ui::theme::init_default();
+              blender::ui::init();
+              /* To have blf_monofont_render available for generated textures checkerboard */
+              blender::ui::reinit_font();
+            }
             wm_window_ghostwindow_blenderplayer_ensure(wm, win, window, first_time_window);
             WM_check(C);
             InitBlenderContextVariables(C);
@@ -1649,11 +1659,6 @@ int main(int argc,
               BPY_python_start(C, argc, (const char **)argv);
               CTX_py_init_set(C, true);
 #  endif /*WITH_PYTHON*/
-              WM_init_gpu_offscreen();
-              blender::ui::theme::init_default();
-              blender::ui::init();
-              /* To have blf_monofont_render available for generated textures checkerboard */
-              blender::ui::reinit_font();
               /* Set Viewport render mode and shading type for the whole runtime */
               useViewportRender = scene->gm.flag & GAME_USE_VIEWPORT_RENDER;
               shadingTypeRuntime = GetShadingTypeRuntime(C);

@@ -1047,7 +1047,11 @@ void DeferredLayer::end_sync(bool is_first_pass,
      * The temporal pass reprojects and accumulates the direct radiance into a persistent
      * history (independent from TAA), the bilateral pass filters the accumulated signal and
      * writes it back into the direct radiance buffers read by the combine pass. */
-    if (use_shadow_denoise_) {
+    /* The pool texture is only acquired during render(). Skip denoising on the first frame:
+     * there is no acquired texture yet (ensure_layer_views() would dereference nullptr) and
+     * no valid history to reproject anyway. */
+    denoise_synced_ = use_shadow_denoise_ && direct_radiance_txs_.gpu_texture() != nullptr;
+    if (denoise_synced_) {
       RenderBuffers &rbuffers = inst_.render_buffers;
       VelocityModule &velocity = inst_.velocity;
       const int closure_count = min_ii(closure_count_, 3);
@@ -1200,7 +1204,7 @@ gpu::Texture *DeferredLayer::render(View &render_view,
 
   /* UPBGE: Shadow denoising. Temporally accumulate then filter the direct radiance before the
    * combine pass consumes it. */
-  if (use_shadow_denoise_) {
+  if (denoise_synced_) {
     constexpr eGPUTextureUsage history_usage = GPU_TEXTURE_USAGE_SHADER_READ |
                                                GPU_TEXTURE_USAGE_SHADER_WRITE;
     bool recreated = false;

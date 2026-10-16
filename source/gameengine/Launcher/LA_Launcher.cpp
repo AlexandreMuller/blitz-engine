@@ -552,8 +552,8 @@ void LA_Launcher::EngineMainLoop()
     CM_Debug("Yielding control to Python script '" << pythonFileName << "'...");
     RunPythonMainLoop(pythonCode);
     CM_Debug("Exit Python script '" << pythonFileName << "'");
-
-    MEM_delete(pythonCode.data()); // Previously allocated with MEM_new_array_uninitialized
+    /* The python code string owns its buffer (copied in KX_GetPythonCode, which already
+     * released the temporary MEM allocation from txt_to_buf). Nothing to free here. */
   }
   else {
     pynextframestate.state = nullptr;

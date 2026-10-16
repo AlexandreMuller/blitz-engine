@@ -413,6 +413,9 @@ class DeferredLayer : DeferredLayerBase {
   bool use_split_radiance_ = true;
   /* UPBGE: Filter and temporally accumulate the direct radiance to remove shadow noise. */
   bool use_shadow_denoise_ = false;
+  /* UPBGE: True when the denoise passes were actually synced this frame. They are skipped on
+   * the first frame because the direct radiance pool texture is only acquired during render(). */
+  bool denoise_synced_ = false;
   /* Output radiance from the combine shader instead of copy. Allow passing unclamped result. */
   bool use_feedback_output_ = false;
   bool use_raytracing_ = false;

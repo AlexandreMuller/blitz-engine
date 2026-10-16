@@ -7,12 +7,15 @@
  */
 
 #include <cstdio>
+#include <cstdlib>
 
 #include "CLG_log.h"
 
 #include "BLI_enum_flags.hh"
 #include "BLI_function_ref.hh"
 #include "BLI_listbase.hh"
+#include "BLI_math_geom_c.hh"
+#include "BLI_math_matrix.hh"
 #include "BLI_map.hh"
 #include "BLI_math_matrix_c.hh"
 #include "BLI_math_matrix_types.hh"
@@ -30,6 +33,7 @@
 #include "BKE_camera.h"
 #include "BKE_compositor.hh"
 #include "BKE_context.hh"
+#include "BKE_light.h"
 #include "BKE_curve.hh"
 #include "BKE_curves.h"
 #include "BKE_duplilist.hh"
@@ -57,6 +61,7 @@
 #include "BKE_volume.hh"
 
 #include "DNA_camera_types.h"
+#include "DNA_light_types.h"
 #include "DNA_mesh_types.h"
 #include "DNA_userdef_types.h"
 #include "DNA_view3d_types.h"
@@ -1333,18 +1338,44 @@ void DRWContext::sync(iter_callback_t iter_callback)
 void DRWContext::engines_init_and_sync(iter_callback_t iter_callback)
 {
   double start_time = BLI_time_now_seconds();
+  DRWGameProfileStats &profile = DRW_game_profile_get();
+  const bool profile_enabled = profile.enabled;
 
-  view_data_active->foreach_enabled_engine([&](DrawEngine &instance) { instance.init(); });
+  if (profile_enabled) {
+    DRW_PROFILE_SCOPE(profile.t_sync_init_begin);
+    view_data_active->foreach_enabled_engine([&](DrawEngine &instance) { instance.init(); });
 
-  view_data_active->manager->begin_sync(this->obact);
+    view_data_active->manager->begin_sync(this->obact);
 
-  view_data_active->foreach_enabled_engine([&](DrawEngine &instance) { instance.begin_sync(); });
+    view_data_active->foreach_enabled_engine([&](DrawEngine &instance) { instance.begin_sync(); });
+  }
+  else {
+    view_data_active->foreach_enabled_engine([&](DrawEngine &instance) { instance.init(); });
 
-  sync(iter_callback);
+    view_data_active->manager->begin_sync(this->obact);
 
-  view_data_active->foreach_enabled_engine([&](DrawEngine &instance) { instance.end_sync(); });
+    view_data_active->foreach_enabled_engine([&](DrawEngine &instance) { instance.begin_sync(); });
+  }
 
-  view_data_active->manager->end_sync();
+  if (profile_enabled) {
+    DRW_PROFILE_SCOPE(profile.t_sync_objects);
+    sync(iter_callback);
+  }
+  else {
+    sync(iter_callback);
+  }
+
+  if (profile_enabled) {
+    DRW_PROFILE_SCOPE(profile.t_sync_end);
+    view_data_active->foreach_enabled_engine([&](DrawEngine &instance) { instance.end_sync(); });
+
+    view_data_active->manager->end_sync();
+  }
+  else {
+    view_data_active->foreach_enabled_engine([&](DrawEngine &instance) { instance.end_sync(); });
+
+    view_data_active->manager->end_sync();
+  }
 
   last_sync_time_ = float(BLI_time_now_seconds() - start_time);
 }
@@ -3155,6 +3186,208 @@ static bool DRW_gpencil_engine_needed_viewport(Depsgraph *depsgraph, View3D *v3d
   return gpencil_any_exists(depsgraph);
 }
 
+/* -------------------------------------------------------------------- */
+/* UPBGE: game render loop instrumentation (BGE_RENDER_PROFILE=1).      */
+
+/* UPBGE Fase 2c: conservative frustum test for an object (world AABB vs 6 planes).
+ * Planes are expected to be inward facing (inside = positive distance).
+ * `margin` expands the frustum outward (used to cover shadow-casting reach). */
+static bool bge_object_in_frustum(const Object &ob, const float (*planes)[4], float margin)
+{
+  const std::optional<Bounds<float3>> bounds = BKE_object_boundbox_get(&ob);
+  if (!bounds) {
+    return true;
+  }
+  const float4x4 &obmat = ob.object_to_world();
+  const float3 &bmin = bounds->min;
+  const float3 &bmax = bounds->max;
+  for (int p = 0; p < 6; p++) {
+    const float3 n(planes[p][0], planes[p][1], planes[p][2]);
+    const float d = planes[p][3];
+    bool all_outside = true;
+    for (int i = 0; i < 8; i++) {
+      const float3 local(i & 1 ? bmax.x : bmin.x,
+                         i & 2 ? bmax.y : bmin.y,
+                         i & 4 ? bmax.z : bmin.z);
+      const float3 world = math::transform_point(obmat, local);
+      if (math::dot(n, world) + d >= -margin) {
+        all_outside = false;
+        break;
+      }
+    }
+    if (all_outside) {
+      return false;
+    }
+  }
+  return true;
+}
+
+/* UPBGE Fase 2c: maximum shadow influence reach over all shadow-casting lights plus the
+ * world sun. Any object further than `2 * reach` from the camera frustum cannot cast a
+ * visible shadow (reach = distance light->caster + distance light->lit-surface worst case).
+ * Returns -1 when culling is unsafe (light probes present). */
+static float bge_compute_shadow_expand(Depsgraph *depsgraph)
+{
+  float reach = 0.0f;
+  bool has_probe = false;
+  const Scene *scene = DEG_get_evaluated_scene(depsgraph);
+  const float light_threshold = (scene) ? max_ff(1e-16f, scene->eevee.light_threshold) : 0.01f;
+
+  DEGObjectIterSettings deg_iter_settings = {nullptr};
+  deg_iter_settings.depsgraph = depsgraph;
+  deg_iter_settings.flags = DEG_ITER_OBJECT_FLAG_LINKED_DIRECTLY |
+                            DEG_ITER_OBJECT_FLAG_LINKED_VIA_SET;
+  DEG_OBJECT_ITER_BEGIN (&deg_iter_settings, ob) {
+    switch (ob->type) {
+      case OB_LAMP: {
+        const Light *la = reinterpret_cast<const Light *>(ob->data);
+        if (la == nullptr || (la->mode & LA_SHADOW) == 0) {
+          break;
+        }
+        if (la->type == LA_SUN) {
+          reach = max_ff(reach, la->cascade_max_dist);
+        }
+        else if (la->mode & LA_CUSTOM_ATTENUATION) {
+          reach = max_ff(reach, la->att_dist);
+        }
+        else {
+          /* Same formula as eevee Light::attenuation_radius_get(). */
+          const float max_power = reduce_max(BKE_light_color(*la)) *
+                                  fabsf(BKE_light_power(*la) / 100.0f);
+          const float surface_power = max(max(la->diff_fac, la->spec_fac), la->transmission_fac) *
+                                      max_power;
+          const float volume_power = la->volume_fac * max_power;
+          const float radius_surface = sqrtf(surface_power / light_threshold);
+          const float radius_volume = sqrtf(volume_power / light_threshold);
+          reach = max_ff(reach, max_ff(radius_surface, radius_volume));
+        }
+        break;
+      }
+      case OB_LIGHTPROBE:
+        has_probe = true;
+        break;
+      default:
+        break;
+    }
+  }
+  DEG_OBJECT_ITER_END;
+
+  if (has_probe) {
+    return -1.0f;
+  }
+
+  /* World sun: the EEVEE creates a sun placeholder from the world shader (sunlight
+   * extraction) whose shadows are not bounded by the depsgraph lights. Use a conservative
+   * margin, overridable via BGE_GAME_FRUSTUM_CULL_EXPAND. */
+  if (scene != nullptr && scene->world != nullptr) {
+    static const float bge_world_sun_margin = []() {
+      const char *env = getenv("BGE_GAME_FRUSTUM_CULL_WORLD_MARGIN");
+      return (env && atof(env) > 0.0) ? float(atof(env)) : 150.0f;
+    }();
+    reach = max_ff(reach, bge_world_sun_margin);
+  }
+
+  /* Worst case: caster on the far side of a light near the frustum boundary. */
+  return 2.0f * reach;
+}
+
+DRWGameProfileStats &DRW_game_profile_get()
+{
+  static DRWGameProfileStats stats = []() {
+    DRWGameProfileStats s;
+    const char *env = getenv("BGE_RENDER_PROFILE");
+    if (env && env[0] != '\0') {
+      s.enabled = (env[0] == '1' || env[0] == 't' || env[0] == 'T' || env[0] == 'y' ||
+                   env[0] == 'Y');
+      if (!s.enabled) {
+        /* Treat the value as a log file path. */
+        s.log_file = fopen(env, "a");
+        s.enabled = true;
+      }
+    }
+    const char *interval = getenv("BGE_RENDER_PROFILE_INTERVAL");
+    if (interval && atoi(interval) > 0) {
+      s.dump_interval = atoi(interval);
+    }
+    return s;
+  }();
+  return stats;
+}
+
+void DRWGameProfileStats::reset_frame()
+{
+  t_acquire = t_sync = t_draw = t_release = 0.0f;
+  t_sync_init_begin = t_sync_objects = t_sync_end = 0.0f;
+  t_eevee_init = t_eevee_begin_sync = t_eevee_object_sync = t_eevee_end_sync = 0.0f;
+  t_rs_probes = t_rs_main_view = t_rs_misc = 0.0f;
+  t_kx_tag_loop = t_kx_tag_eval = t_kx_depsgraph = t_kx_2dfilter_blit = 0.0f;
+  n_objects_iter = n_objects_populated = n_kx_objects = 0;
+  n_frustum_in = n_frustum_out = 0;
+  n_eevee_synced_lights = 0;
+  samples_per_frame = 0;
+  camera_passes = 0;
+}
+
+void DRWGameProfileStats::dump_frame()
+{
+  if (!enabled) {
+    return;
+  }
+  ++frame_count;
+  if (frame_count < dump_interval) {
+    return;
+  }
+  FILE *out = log_file ? log_file : stdout;
+  const float inv = 1.0f / float(frame_count);
+  fprintf(out, "\n== BGE_RENDER_PROFILE (avg over %d frames) ==\n", frame_count);
+  fprintf(out,
+          "[KX_Scene]      tag_loop %.3f ms | depsgraph %.3f ms | tag_eval %.3f ms\n",
+          t_kx_tag_loop * 1e3f * inv,
+          t_kx_depsgraph * 1e3f * inv,
+          t_kx_tag_eval * 1e3f * inv);
+  fprintf(out,
+          "[game_loop]     acquire %.3f ms | sync %.3f ms | draw %.3f ms | release %.3f ms\n",
+          t_acquire * 1e3f * inv,
+          t_sync * 1e3f * inv,
+          t_draw * 1e3f * inv,
+          t_release * 1e3f * inv);
+  fprintf(out,
+          "[sync break]    init+begin %.3f ms | objects+extract %.3f ms | end %.3f ms\n",
+          t_sync_init_begin * 1e3f * inv,
+          t_sync_objects * 1e3f * inv,
+          t_sync_end * 1e3f * inv);
+  fprintf(out,
+          "[eevee sync]    init %.3f ms | begin %.3f ms | object_sync %.3f ms | end %.3f ms\n",
+          t_eevee_init * 1e3f * inv,
+          t_eevee_begin_sync * 1e3f * inv,
+          t_eevee_object_sync * 1e3f * inv,
+          t_eevee_end_sync * 1e3f * inv);
+  fprintf(out,
+          "[render_sample] probes %.3f ms | main_view %.3f ms | misc %.3f ms\n",
+          t_rs_probes * 1e3f * inv,
+          t_rs_main_view * 1e3f * inv,
+          t_rs_misc * 1e3f * inv);
+  fprintf(out, "[2dfilter+blit] %.3f ms\n", t_kx_2dfilter_blit * 1e3f * inv);
+  fprintf(out,
+          "[counts]        kx_objects %lld | iter %lld | populated %lld | samples %d | passes "
+          "%d\n",
+          (long long)(n_kx_objects * inv),
+          (long long)(n_objects_iter * inv),
+          (long long)(n_objects_populated * inv),
+          samples_per_frame,
+          camera_passes);
+  fprintf(out,
+          "[frustum]       in %lld | out %lld (%.1f%% cullable) | shadow_expand %.1f m\n",
+          (long long)(n_frustum_in * inv),
+          (long long)(n_frustum_out * inv),
+          100.0 * double(n_frustum_out) / double(max(int64_t(1), n_frustum_in + n_frustum_out)),
+          shadow_expand);
+  fprintf(out, "[lights]        eevee_synced %lld\n", (long long)(n_eevee_synced_lights * inv));
+  fflush(out);
+  frame_count = 0;
+  reset_frame();
+}
+
 void DRW_game_render_loop(bContext *C,
                           GPUViewport *viewport,
                           Depsgraph *depsgraph,
@@ -3162,6 +3395,7 @@ void DRW_game_render_loop(bContext *C,
                           bool is_overlay_pass)
 {
   using namespace blender::draw;
+  DRWGameProfileStats &profile = DRW_game_profile_get();
   Scene *scene = DEG_get_evaluated_scene(depsgraph);
 
   ARegion *ar = CTX_wm_region(C);
@@ -3177,7 +3411,13 @@ void DRW_game_render_loop(bContext *C,
                                       (v3d->shading.type != OB_RENDER)) &&
                                      !is_overlay_pass;
 
-  draw_ctx.acquire_data();
+  if (profile.enabled) {
+    DRW_PROFILE_SCOPE(profile.t_acquire);
+    draw_ctx.acquire_data();
+  }
+  else {
+    draw_ctx.acquire_data();
+  }
 
   const bool gpencil_engine_needed = DRW_gpencil_engine_needed_viewport(depsgraph, v3d);
 
@@ -3190,29 +3430,120 @@ void DRW_game_render_loop(bContext *C,
   }
   view_data.compositor.set_used(draw_ctx.is_viewport_compositor_used());
 
-  auto should_draw_object = [&](Object &ob, bool /*has_duplis*/) -> DrawFilter {
-    return BKE_object_is_visible_in_viewport(v3d, &ob) ? DrawFilter::Draw : DrawFilter::Skip;
-  };
-
-  draw_ctx.engines_init_and_sync([&](DupliCacheManager &duplis, ExtractionGraph &extraction) {
-    if (is_overlay_pass) {
-      foreach_obref_in_scene(draw_ctx, should_draw_object, [&](ObjectRef &ob_ref) {
-        Object *orig_ob = DEG_get_original(ob_ref.object);
-        if (orig_ob->gameflag & OB_OVERLAY_COLLECTION) {
-          drw_engines_cache_populate(ob_ref, duplis, extraction);
-        }
-      });
+  /* UPBGE Fase 2c: optional pre-sync frustum culling for games (BGE_GAME_FRUSTUM_CULL=1).
+   * Culls objects outside the camera frustum expanded by the maximum shadow reach.
+   * Known limitations (documented): does not account for scene-time driven materials. */
+  static const bool bge_frustum_cull = []() {
+    const char *env = getenv("BGE_GAME_FRUSTUM_CULL");
+    return env &&
+           (env[0] == '1' || env[0] == 't' || env[0] == 'T' || env[0] == 'y' || env[0] == 'Y');
+  }();
+  /* Negative expand disables culling for the current depsgraph state. */
+  float bge_shadow_expand = -1.0f;
+  if (bge_frustum_cull) {
+    /* Optional manual override of the expand margin (meters). -1 disables culling. */
+    static const float bge_expand_override = []() {
+      const char *env = getenv("BGE_GAME_FRUSTUM_CULL_EXPAND");
+      return env ? float(atof(env)) : -2.0f; /* -2 = no override */
+    }();
+    if (bge_expand_override > -1.5f) {
+      bge_shadow_expand = bge_expand_override;
     }
     else {
-      foreach_obref_in_scene(draw_ctx, should_draw_object, [&](ObjectRef &ob_ref) {
-        Object *orig_ob = DEG_get_original(ob_ref.object);
-        /* Don't render objects in overlay collections in main pass */
-        if ((orig_ob->gameflag & OB_OVERLAY_COLLECTION) == 0) {
-          drw_engines_cache_populate(ob_ref, duplis, extraction);
-        }
-      });
+      static uint64_t bge_cull_cache_update_count = 0;
+      static float bge_cull_cache_expand = -1.0f;
+      const uint64_t update_count = DEG_get_update_count(depsgraph);
+      if (update_count != bge_cull_cache_update_count) {
+        bge_cull_cache_expand = bge_compute_shadow_expand(depsgraph);
+        bge_cull_cache_update_count = update_count;
+      }
+      bge_shadow_expand = bge_cull_cache_expand;
     }
-  });
+    profile.shadow_expand = bge_shadow_expand;
+  }
+
+  /* UPBGE Fase 2c: extract camera frustum planes (needed for culling and/or measurement). */
+  float bge_frustum_planes[6][4];
+  const bool bge_frustum_valid = (profile.enabled || bge_frustum_cull) &&
+                                 (draw_ctx.rv3d != nullptr);
+  if (bge_frustum_valid) {
+    float projmat[4][4];
+    mul_m4_m4m4(projmat, draw_ctx.rv3d->winmat, draw_ctx.rv3d->viewmat);
+    planes_from_projmat(projmat,
+                        bge_frustum_planes[0],
+                        bge_frustum_planes[1],
+                        bge_frustum_planes[2],
+                        bge_frustum_planes[3],
+                        bge_frustum_planes[4],
+                        bge_frustum_planes[5]);
+  }
+
+  auto should_draw_object = [&](Object &ob, bool /*has_duplis*/) -> DrawFilter {
+    DrawFilter filter = BKE_object_is_visible_in_viewport(v3d, &ob) ? DrawFilter::Draw :
+                                                                      DrawFilter::Skip;
+    if (filter == DrawFilter::Draw && bge_shadow_expand >= 0.0f) {
+      if (!bge_object_in_frustum(ob, bge_frustum_planes, bge_shadow_expand)) {
+        filter = DrawFilter::Skip;
+      }
+    }
+    if (bge_frustum_valid && filter == DrawFilter::Draw) {
+      if (bge_object_in_frustum(ob, bge_frustum_planes, 0.0f)) {
+        profile.n_frustum_in++;
+      }
+      else {
+        profile.n_frustum_out++;
+      }
+    }
+    return filter;
+  };
+
+  if (profile.enabled) {
+    DRW_PROFILE_SCOPE(profile.t_sync);
+    draw_ctx.engines_init_and_sync([&](DupliCacheManager &duplis, ExtractionGraph &extraction) {
+      if (is_overlay_pass) {
+        foreach_obref_in_scene(draw_ctx, should_draw_object, [&](ObjectRef &ob_ref) {
+          profile.n_objects_iter++;
+          Object *orig_ob = DEG_get_original(ob_ref.object);
+          if (orig_ob->gameflag & OB_OVERLAY_COLLECTION) {
+            profile.n_objects_populated++;
+            drw_engines_cache_populate(ob_ref, duplis, extraction);
+          }
+        });
+      }
+      else {
+        foreach_obref_in_scene(draw_ctx, should_draw_object, [&](ObjectRef &ob_ref) {
+          profile.n_objects_iter++;
+          Object *orig_ob = DEG_get_original(ob_ref.object);
+          /* Don't render objects in overlay collections in main pass */
+          if ((orig_ob->gameflag & OB_OVERLAY_COLLECTION) == 0) {
+            profile.n_objects_populated++;
+            drw_engines_cache_populate(ob_ref, duplis, extraction);
+          }
+        });
+      }
+    });
+  }
+  else {
+    draw_ctx.engines_init_and_sync([&](DupliCacheManager &duplis, ExtractionGraph &extraction) {
+      if (is_overlay_pass) {
+        foreach_obref_in_scene(draw_ctx, should_draw_object, [&](ObjectRef &ob_ref) {
+          Object *orig_ob = DEG_get_original(ob_ref.object);
+          if (orig_ob->gameflag & OB_OVERLAY_COLLECTION) {
+            drw_engines_cache_populate(ob_ref, duplis, extraction);
+          }
+        });
+      }
+      else {
+        foreach_obref_in_scene(draw_ctx, should_draw_object, [&](ObjectRef &ob_ref) {
+          Object *orig_ob = DEG_get_original(ob_ref.object);
+          /* Don't render objects in overlay collections in main pass */
+          if ((orig_ob->gameflag & OB_OVERLAY_COLLECTION) == 0) {
+            drw_engines_cache_populate(ob_ref, duplis, extraction);
+          }
+        });
+      }
+    });
+  }
 
   /* No frame-buffer allowed before drawing. */
   BLI_assert(GPU_framebuffer_active_get() == GPU_framebuffer_back_get());
@@ -3220,10 +3551,22 @@ void DRW_game_render_loop(bContext *C,
   GPU_framebuffer_clear_depth_stencil(draw_ctx.default_framebuffer(), 1.0f, 0xFF);
 
   drw_callbacks_pre_scene(draw_ctx);
-  draw_ctx.engines_draw_scene();
+  if (profile.enabled) {
+    DRW_PROFILE_SCOPE(profile.t_draw);
+    draw_ctx.engines_draw_scene();
+  }
+  else {
+    draw_ctx.engines_draw_scene();
+  }
   drw_callbacks_post_scene(draw_ctx);
 
-  draw_ctx.release_data();
+  if (profile.enabled) {
+    DRW_PROFILE_SCOPE(profile.t_release);
+    draw_ctx.release_data();
+  }
+  else {
+    draw_ctx.release_data();
+  }
 
   GPU_viewport_unbind(viewport);
 }

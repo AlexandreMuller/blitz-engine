@@ -922,31 +922,76 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
 
   PrepareGPUViewport(cam);
 
+  DRWGameProfileStats &profile = DRW_game_profile_get();
+  const bool profile_enabled = profile.enabled;
+  if (profile_enabled) {
+    profile.n_kx_objects += GetObjectList()->GetCount();
+  }
+
   /* Always sync game object transforms: TagForTransformUpdate keeps the original
    * blender objects in sync and tags the depsgraph only for objects that really
    * need evaluation (modifiers, constraints, shape keys, drivers...), marking the
    * depsgraph dirty in that case. This must run before the dirty check below. */
-  for (KX_GameObject *gameobj : GetObjectList()) {
-    /* Update compatibles blender physics simulations */
-    blender::Object *ob = gameobj->GetBlenderObject();
-    TagBlenderPhysicsObject(scene, ob);
-    gameobj->TagForTransformUpdate(is_overlay_pass);
+  /* Interactive dynapaint / rigidbody tagging is scene-constant: hoist the flag check
+   * out of the per-object loop. */
+  const bool game_interactive_phys =
+      (scene->gm.flag & (GAME_USE_INTERACTIVE_DYNAPAINT | GAME_USE_INTERACTIVE_RIGIDBODY)) != 0;
 
-    /* Game-engine driven particle systems need the depsgraph to be evaluated
-     * every frame so that update_game_particle_systems() can advance the
-     * simulation independently of the timeline. */
-    if (ob && !BLI_listbase_is_empty(&ob->particlesystem)) {
-      for (ParticleSystem *psys = static_cast<ParticleSystem *>(ob->particlesystem.first_);
-           psys;
-           psys = static_cast<ParticleSystem *>(psys->next))
-      {
-        if (psys->part && psys->part->game_simulation_steps > 0 &&
-            psys->part->type != PART_HAIR &&
-            !(psys->part->type >= PART_FLUID &&
-              psys->part->type <= PART_FLUID_SPRAYFOAMBUBBLE))
+  if (profile_enabled) {
+    DRW_PROFILE_SCOPE(profile.t_kx_tag_loop);
+    for (KX_GameObject *gameobj : GetObjectList()) {
+      /* Update compatibles blender physics simulations */
+      blender::Object *ob = gameobj->GetBlenderObject();
+      if (game_interactive_phys) {
+        TagBlenderPhysicsObject(scene, ob);
+      }
+      gameobj->TagForTransformUpdate(is_overlay_pass);
+
+      /* Game-engine driven particle systems need the depsgraph to be evaluated
+       * every frame so that update_game_particle_systems() can advance the
+       * simulation independently of the timeline. */
+      if (ob && !BLI_listbase_is_empty(&ob->particlesystem)) {
+        for (ParticleSystem *psys = static_cast<ParticleSystem *>(ob->particlesystem.first_);
+             psys;
+             psys = static_cast<ParticleSystem *>(psys->next))
         {
-          engine->MarkDepsgraphDirty();
-          break;
+          if (psys->part && psys->part->game_simulation_steps > 0 &&
+              psys->part->type != PART_HAIR &&
+              !(psys->part->type >= PART_FLUID &&
+                psys->part->type <= PART_FLUID_SPRAYFOAMBUBBLE))
+          {
+            engine->MarkDepsgraphDirty();
+            break;
+          }
+        }
+      }
+    }
+  }
+  else {
+    for (KX_GameObject *gameobj : GetObjectList()) {
+      /* Update compatibles blender physics simulations */
+      blender::Object *ob = gameobj->GetBlenderObject();
+      if (game_interactive_phys) {
+        TagBlenderPhysicsObject(scene, ob);
+      }
+      gameobj->TagForTransformUpdate(is_overlay_pass);
+
+      /* Game-engine driven particle systems need the depsgraph to be evaluated
+       * every frame so that update_game_particle_systems() can advance the
+       * simulation independently of the timeline. */
+      if (ob && !BLI_listbase_is_empty(&ob->particlesystem)) {
+        for (ParticleSystem *psys = static_cast<ParticleSystem *>(ob->particlesystem.first_);
+             psys;
+             psys = static_cast<ParticleSystem *>(psys->next))
+        {
+          if (psys->part && psys->part->game_simulation_steps > 0 &&
+              psys->part->type != PART_HAIR &&
+              !(psys->part->type >= PART_FLUID &&
+                psys->part->type <= PART_FLUID_SPRAYFOAMBUBBLE))
+          {
+            engine->MarkDepsgraphDirty();
+            break;
+          }
         }
       }
     }
@@ -957,7 +1002,13 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
   // Particle systems driven by game_simulation_steps force the depsgraph dirty above.
   if (engine->IsDepsgraphDirty()) {
     engine->CountDepsgraphTime();
-    UpdateDepsgraph(bmain, scene, is_overlay_pass, is_last_render_pass, cam);
+    if (profile_enabled) {
+      DRW_PROFILE_SCOPE(profile.t_kx_depsgraph);
+      UpdateDepsgraph(bmain, scene, is_overlay_pass, is_last_render_pass, cam);
+    }
+    else {
+      UpdateDepsgraph(bmain, scene, is_overlay_pass, is_last_render_pass, cam);
+    }
     engine->EndCountDepsgraphTime();
     engine->ClearDepsgraphDirty();
   }
@@ -965,8 +1016,16 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
   /* Always copy the (possibly interpolated) SceneGraph transforms to the evaluated
    * objects, even when the depsgraph evaluation was skipped above. Without this,
    * pure physics objects would stay frozen at their first evaluated transform. */
-  for (KX_GameObject *gameobj : GetObjectList()) {
-    gameobj->TagForTransformUpdateEvaluated(is_last_render_pass);
+  if (profile_enabled) {
+    DRW_PROFILE_SCOPE(profile.t_kx_tag_eval);
+    for (KX_GameObject *gameobj : GetObjectList()) {
+      gameobj->TagForTransformUpdateEvaluated(is_last_render_pass);
+    }
+  }
+  else {
+    for (KX_GameObject *gameobj : GetObjectList()) {
+      gameobj->TagForTransformUpdateEvaluated(is_last_render_pass);
+    }
   }
 
   if (m_taaResetRequested) {
@@ -1032,6 +1091,9 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
 
   short samples_per_frame = min_ii(scene->gm.samples_per_frame, scene->eevee.taa_samples);
   samples_per_frame = max_ii(samples_per_frame, 1);
+  if (profile_enabled) {
+    profile.samples_per_frame = samples_per_frame;
+  }
 
   for (short i = 0; i < samples_per_frame; i++) {
     if (background_fb) {
@@ -1043,39 +1105,78 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
     DRW_game_render_loop(C, m_currentGPUViewport, depsgraph, &window, is_overlay_pass);
   }
 
-  RAS_FrameBuffer *input = rasty->GetFrameBuffer(rasty->NextFilterFrameBuffer(r));
-  RAS_FrameBuffer *output = rasty->GetFrameBuffer(rasty->NextRenderFrameBuffer(s));
+  if (profile_enabled) {
+    DRW_PROFILE_SCOPE(profile.t_kx_2dfilter_blit);
+    RAS_FrameBuffer *input = rasty->GetFrameBuffer(rasty->NextFilterFrameBuffer(r));
+    RAS_FrameBuffer *output = rasty->GetFrameBuffer(rasty->NextRenderFrameBuffer(s));
 
-  blender::gpu::Texture *color = GPU_viewport_color_texture(m_currentGPUViewport, 0);
-  GPUAttachment config[] = {
-      GPU_ATTACHMENT_TEXTURE(GPU_viewport_depth_texture(m_currentGPUViewport)),
-      GPU_ATTACHMENT_TEXTURE(color)};
+    blender::gpu::Texture *color = GPU_viewport_color_texture(m_currentGPUViewport, 0);
+    GPUAttachment config[] = {
+        GPU_ATTACHMENT_TEXTURE(GPU_viewport_depth_texture(m_currentGPUViewport)),
+        GPU_ATTACHMENT_TEXTURE(color)};
 
-  GPU_framebuffer_config_array(
-      input->GetFrameBuffer(), config, sizeof(config) / sizeof(GPUAttachment));
+    GPU_framebuffer_config_array(
+        input->GetFrameBuffer(), config, sizeof(config) / sizeof(GPUAttachment));
 
-  output->UpdateSize(GPU_texture_width(color), GPU_texture_height(color));
+    output->UpdateSize(GPU_texture_width(color), GPU_texture_height(color));
 
-  /* Clear output framebuffer to ensure it has no color from previous pass.
-   * (was causing troubles in Vulkan + custom bge viewports) */
-  GPU_framebuffer_bind(output->GetFrameBuffer());
-  GPU_framebuffer_clear_color_depth(output->GetFrameBuffer(), {0.0, 0.0, 0.0, 1.0}, 1.0f);
-  GPU_framebuffer_restore();
+    /* Clear output framebuffer to ensure it has no color from previous pass.
+     * (was causing troubles in Vulkan + custom bge viewports) */
+    GPU_framebuffer_bind(output->GetFrameBuffer());
+    GPU_framebuffer_clear_color_depth(output->GetFrameBuffer(), {0.0, 0.0, 0.0, 1.0}, 1.0f);
+    GPU_framebuffer_restore();
 
-  /* Draw 2D filters */
-  RAS_FrameBuffer *f = is_overlay_pass || !background_fb ?
-                           input :
-                           Render2DFilters(rasty, canvas, input, output);
+    /* Draw 2D filters */
+    RAS_FrameBuffer *f = is_overlay_pass || !background_fb ?
+                             input :
+                             Render2DFilters(rasty, canvas, input, output);
 
-  GPU_framebuffer_restore();
+    GPU_framebuffer_restore();
 
-  if (background_fb) {
-    /* Draw this camera render into background framebuffer */
-    GPU_framebuffer_bind(background_fb->GetFrameBuffer());
-    GPU_viewport(v[0], v[1], v[2] + 1, v[3] + 1);
-    GPU_scissor_test(true);
-    GPU_scissor(v[0], v[1], v[2] + 1, v[3] + 1);
-    rasty->DrawFrameBuffer(f, background_fb);
+    if (background_fb) {
+      /* Draw this camera render into background framebuffer */
+      GPU_framebuffer_bind(background_fb->GetFrameBuffer());
+      GPU_viewport(v[0], v[1], v[2] + 1, v[3] + 1);
+      GPU_scissor_test(true);
+      GPU_scissor(v[0], v[1], v[2] + 1, v[3] + 1);
+      rasty->DrawFrameBuffer(f, background_fb);
+    }
+  }
+  else {
+    RAS_FrameBuffer *input = rasty->GetFrameBuffer(rasty->NextFilterFrameBuffer(r));
+    RAS_FrameBuffer *output = rasty->GetFrameBuffer(rasty->NextRenderFrameBuffer(s));
+
+    blender::gpu::Texture *color = GPU_viewport_color_texture(m_currentGPUViewport, 0);
+    GPUAttachment config[] = {
+        GPU_ATTACHMENT_TEXTURE(GPU_viewport_depth_texture(m_currentGPUViewport)),
+        GPU_ATTACHMENT_TEXTURE(color)};
+
+    GPU_framebuffer_config_array(
+        input->GetFrameBuffer(), config, sizeof(config) / sizeof(GPUAttachment));
+
+    output->UpdateSize(GPU_texture_width(color), GPU_texture_height(color));
+
+    /* Clear output framebuffer to ensure it has no color from previous pass.
+     * (was causing troubles in Vulkan + custom bge viewports) */
+    GPU_framebuffer_bind(output->GetFrameBuffer());
+    GPU_framebuffer_clear_color_depth(output->GetFrameBuffer(), {0.0, 0.0, 0.0, 1.0}, 1.0f);
+    GPU_framebuffer_restore();
+
+    /* Draw 2D filters */
+    RAS_FrameBuffer *f = is_overlay_pass || !background_fb ?
+                             input :
+                             Render2DFilters(rasty, canvas, input, output);
+
+    GPU_framebuffer_restore();
+
+    if (background_fb) {
+      /* Draw this camera render into background framebuffer */
+      GPU_framebuffer_bind(background_fb->GetFrameBuffer());
+      GPU_viewport(v[0], v[1], v[2] + 1, v[3] + 1);
+      GPU_scissor_test(true);
+      GPU_scissor(v[0], v[1], v[2] + 1, v[3] + 1);
+      rasty->DrawFrameBuffer(f, background_fb);
+    }
   }
 
   GPU_framebuffer_restore();

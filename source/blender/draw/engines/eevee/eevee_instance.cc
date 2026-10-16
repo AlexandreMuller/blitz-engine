@@ -44,6 +44,8 @@
 #include "draw_debug.hh"
 #include "draw_view_data.hh"
 
+#include "DRW_render.hh" /* UPBGE: game render profile (BGE_RENDER_PROFILE). */
+
 namespace blender::eevee {
 
 CLG_LogRef Instance::log = {"eevee"};
@@ -65,6 +67,8 @@ void *Instance::debug_scope_irradiance_sample = nullptr;
 
 void Instance::init()
 {
+  DRWGameProfileStats &game_profile = DRW_game_profile_get();
+  DRWGameProfileTimer _profile_timer(game_profile.enabled, game_profile.t_eevee_init);
   this->draw_ctx = DRW_context_get();
 
   Depsgraph *depsgraph = draw_ctx->depsgraph;
@@ -366,6 +370,8 @@ void Instance::update_eval_members()
 
 void Instance::begin_sync()
 {
+  DRWGameProfileStats &game_profile = DRW_game_profile_get();
+  DRWGameProfileTimer _profile_timer(game_profile.enabled, game_profile.t_eevee_begin_sync);
   /* Needs to be first for sun light parameters.
    * Also not skipped to be able to request world shader.
    * If engine shaders are not ready, will skip the pipeline sync. */
@@ -412,11 +418,16 @@ void Instance::begin_sync()
 
 void Instance::object_sync(ObjectRef &ob_ref, Manager & /*manager*/)
 {
+  DRWGameProfileStats &game_profile = DRW_game_profile_get();
+  DRWGameProfileTimer _profile_timer(game_profile.enabled, game_profile.t_eevee_object_sync);
   if (skip_render_) {
     return;
   }
 
   Object *ob = ob_ref.object;
+  if (ob->type == OB_LAMP) {
+    game_profile.n_eevee_synced_lights++;
+  }
   const bool is_renderable_type = ELEM(ob->type,
                                        OB_CURVES,
                                        OB_GREASE_PENCIL,
@@ -470,6 +481,8 @@ void Instance::object_sync(ObjectRef &ob_ref, Manager & /*manager*/)
 
 void Instance::end_sync()
 {
+  DRWGameProfileStats &game_profile = DRW_game_profile_get();
+  DRWGameProfileTimer _profile_timer(game_profile.enabled, game_profile.t_eevee_end_sync);
   if (skip_render_) {
     /* We might run in the case where the next check sets skip_render_ to false after the
      * begin_sync was skipped, which would call `end_sync` function with invalid data. */
@@ -558,11 +571,22 @@ bool Instance::do_planar_probe_sync() const
 
 void Instance::render_sample()
 {
+  DRWGameProfileStats &game_profile = DRW_game_profile_get();
+  const bool profile_game = game_profile.enabled;
   if (sampling.finished_viewport()) {
+    /* Critical section. Potential gpu::Shader concurrent usage. */
     DRW_submission_start();
-    uniform_data.push_update();
-    film.display();
-    lookdev.display();
+    if (profile_game) {
+      DRW_PROFILE_SCOPE(game_profile.t_rs_misc);
+      uniform_data.push_update();
+      film.display();
+      lookdev.display();
+    }
+    else {
+      uniform_data.push_update();
+      film.display();
+      lookdev.display();
+    }
     DRW_submission_end();
     return;
   }
@@ -587,21 +611,49 @@ void Instance::render_sample()
     /* Critical section. Potential gpu::Shader concurrent usage. */
     DRW_submission_start();
 
-    sampling.step();
-    film.update_sample_table();
-    uniform_data.push_update();
+    if (profile_game) {
+      DRW_PROFILE_SCOPE(game_profile.t_rs_misc);
+      sampling.step();
+      film.update_sample_table();
+      uniform_data.push_update();
+    }
+    else {
+      sampling.step();
+      film.update_sample_table();
+      uniform_data.push_update();
+    }
 
-    capture_view.render_world();
-    lookdev.rotate_world();
-    capture_view.render_probes();
+    if (profile_game) {
+      DRW_PROFILE_SCOPE(game_profile.t_rs_probes);
+      capture_view.render_world();
+      lookdev.rotate_world();
+      capture_view.render_probes();
+    }
+    else {
+      capture_view.render_world();
+      lookdev.rotate_world();
+      capture_view.render_probes();
+    }
 
-    main_view.render();
-
-    lookdev_view.render();
+    if (profile_game) {
+      DRW_PROFILE_SCOPE(game_profile.t_rs_main_view);
+      main_view.render();
+      lookdev_view.render();
+    }
+    else {
+      main_view.render();
+      lookdev_view.render();
+    }
 
     DRW_submission_end();
   }
-  motion_blur.step();
+  if (profile_game) {
+    DRW_PROFILE_SCOPE(game_profile.t_rs_misc);
+    motion_blur.step();
+  }
+  else {
+    motion_blur.step();
+  }
 }
 
 void Instance::render_read_result(RenderLayer *render_layer, const char *view_name)
