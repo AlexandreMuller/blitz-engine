@@ -513,6 +513,22 @@ struct DRWGameProfileStats {
   float t_rs_probes = 0.0f;
   float t_rs_main_view = 0.0f;
   float t_rs_misc = 0.0f;
+  /* Fase 3: breakdown of ShadingView::render() stages (the content of main_view.render()). */
+  float t_sv_setup = 0.0f;      /* acquire fbs/buffers + clears. */
+  float t_sv_lights = 0.0f;     /* background clear, lights.set_view, hiz source. */
+  float t_sv_volume_pre = 0.0f; /* volume.draw_prepass. */
+  float t_sv_deferred = 0.0f;   /* pipelines.deferred.render. */
+  float t_sv_volume = 0.0f;     /* volume.draw_compute + draw_resolve. */
+  float t_sv_ao = 0.0f;         /* ambient_occlusion.render_pass. */
+  float t_sv_forward = 0.0f;    /* pipelines.forward.render. */
+  float t_sv_postfx_film = 0.0f;/* render_postfx + film.accumulate. */
+  /* Fase 3: breakdown inside DeferredLayer::render (the content of the deferred stage). */
+  float t_df_setup = 0.0f;      /* framebuffer/stencil clears + prepass. */
+  float t_df_shadows = 0.0f;    /* hiz swap/update + volume/sphere probes set_view + shadows.render. */
+  float t_df_gbuffer = 0.0f;    /* gbuffer bind + submit(gbuffer_ps). */
+  float t_df_eval_light = 0.0f; /* direct radiance acquire + eval_light + subsurface submit. */
+  float t_df_denoise = 0.0f;    /* shadow denoise temporal + bilateral submits. */
+  float t_df_combine = 0.0f;    /* combine submit + feedback copies. */
   /* KX_Scene.cpp RenderAfterCameraSetup(). */
   float t_kx_tag_loop = 0.0f;
   float t_kx_tag_eval = 0.0f;

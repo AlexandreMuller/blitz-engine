@@ -182,6 +182,10 @@ KX_KetsjiEngine::KX_KetsjiEngine(KX_ISystem *system,
  */
 KX_KetsjiEngine::~KX_KetsjiEngine()
 {
+  /* UPBGE Fase 4: resolve any deferred SwapBuffers before teardown so the last frame is
+   * presented and no buffer state is left dangling. */
+  SwapBuffersNow();
+
 #ifdef WITH_PYTHON
   Py_CLEAR(m_pyprofiledict);
 #endif
@@ -285,8 +289,33 @@ void KX_KetsjiEngine::StartEngine()
   m_bInitialized = true;
 }
 
+/* UPBGE Fase 4 (experimental): render-ahead enabled via BGE_RENDER_AHEAD=1. */
+bool KX_KetsjiEngine::UseRenderAhead()
+{
+  static const bool enabled = []() {
+    const char *env = getenv("BGE_RENDER_AHEAD");
+    return env &&
+           (env[0] == '1' || env[0] == 't' || env[0] == 'T' || env[0] == 'y' || env[0] == 'Y');
+  }();
+  return enabled;
+}
+
+void KX_KetsjiEngine::SwapBuffersNow()
+{
+  if (m_swapBuffersPending) {
+    m_logger.StartLog(tc_latency);
+    m_canvas->SwapBuffers();
+    m_logger.StartLog(tc_rasterizer);
+    m_swapBuffersPending = false;
+  }
+}
+
 void KX_KetsjiEngine::BeginFrame()
 {
+  /* UPBGE Fase 4: with render-ahead, the previous frame's SwapBuffers is done here, before any
+   * new drawing. This overlaps the CPU of the current frame with the GPU of the previous one. */
+  SwapBuffersNow();
+
   m_rasterizer->BeginFrame(m_frameTime);
 
   m_canvas->BeginDraw();
@@ -330,9 +359,15 @@ void KX_KetsjiEngine::EndFrame()
   m_canvas->FlushScreenshots();
 
   // swap backbuffer (drawing into this buffer) <-> front/visible buffer
-  m_logger.StartLog(tc_latency);
-  m_canvas->SwapBuffers();
-  m_logger.StartLog(tc_rasterizer);
+  if (UseRenderAhead()) {
+    /* UPBGE Fase 4: defer the blocking SwapBuffers to the next BeginFrame (render-ahead). */
+    m_swapBuffersPending = true;
+  }
+  else {
+    m_logger.StartLog(tc_latency);
+    m_canvas->SwapBuffers();
+    m_logger.StartLog(tc_rasterizer);
+  }
 
   m_canvas->EndDraw();
 }
@@ -877,6 +912,17 @@ void KX_KetsjiEngine::Render()
   DRWGameProfileStats &game_profile = DRW_game_profile_get();
   game_profile.camera_passes = pass;
   game_profile.dump_frame();
+
+  /* UPBGE Fase 4: also dump the engine's own GPU latency (tc_latency, from SwapBuffers wait)
+   * so we can quantify render-ahead potential on the same cadence. */
+  if (game_profile.enabled) {
+    FILE *out = game_profile.log_file ? game_profile.log_file : stdout;
+    fprintf(out,
+            "[latency]       GPU_latency %.3f ms | fps %.1f\n",
+            m_logger.GetAverage(tc_latency) * 1e3,
+            m_average_framerate);
+    fflush(out);
+  }
 }
 
 void KX_KetsjiEngine::RequestExit(KX_ExitRequest exitrequestmode)

@@ -315,6 +315,13 @@ class KX_KetsjiEngine {
   void EndCountDepsgraphTime();
   void EndFrameViewportRender();
   std::vector<KX_Camera *> GetRenderingCameras();
+
+  /* UPBGE Fase 4 (experimental): pending SwapBuffers state for render-ahead (1 frame).
+   * When enabled, the blocking SwapBuffers (v-sync/GPU wait) is deferred from EndFrame to the
+   * next BeginFrame, so the CPU of frame N+1 overlaps the GPU of frame N. */
+  bool m_swapBuffersPending = false;
+  void SwapBuffersNow();
+  bool UseRenderAhead();
   /***** End of EEVEE integration *****/
 
   void EndFrame();

@@ -15,6 +15,7 @@
 
 #include "DNA_scene_types.h"
 
+#include "DRW_render.hh" /* UPBGE: game render profile (BGE_RENDER_PROFILE). */
 #include "eevee_instance.hh"
 #include "eevee_pipeline.hh"
 #include "eevee_shadow.hh"
@@ -1156,94 +1157,116 @@ gpu::Texture *DeferredLayer::render(View &render_view,
   constexpr eGPUTextureUsage usage_write = GPU_TEXTURE_USAGE_SHADER_WRITE;
   constexpr eGPUTextureUsage usage_rw = usage_read | usage_write;
 
+  /* UPBGE Fase 3: breakdown of this deferred layer's render (CPU submit cost). */
+  DRWGameProfileStats &profile = DRW_game_profile_get();
+  const bool profile_game = profile.enabled;
+
   if (use_screen_transmission_) {
     /* Update for refraction. */
     inst_.hiz_buffer.update();
   }
 
-  GPU_framebuffer_bind(prepass_fb);
-  /* Clear stencil buffer so that prepass can tag it. Then draw a full-screen triangle that will
-   * clear AOVs for all the pixels touched by this layer. */
-  GPU_framebuffer_clear_stencil(prepass_fb, 0xFFu);
-  prepass_.render(render_view, rb.depth_tx, true);
-  if (!clear_aovs_ps_.is_empty()) {
-    inst_.manager->submit(clear_aovs_ps_);
+  {
+    DRWGameProfileTimer _profile_setup(profile_game, profile.t_df_setup);
+    GPU_framebuffer_bind(prepass_fb);
+    /* Clear stencil buffer so that prepass can tag it. Then draw a full-screen triangle that
+     * will clear AOVs for all the pixels touched by this layer. */
+    GPU_framebuffer_clear_stencil(prepass_fb, 0xFFu);
+    prepass_.render(render_view, rb.depth_tx, true);
+    if (!clear_aovs_ps_.is_empty()) {
+      inst_.manager->submit(clear_aovs_ps_);
+    }
   }
 
-  inst_.hiz_buffer.swap_layer();
-  /* Update for lighting pass or AO node. */
-  inst_.hiz_buffer.update();
+  {
+    DRWGameProfileTimer _profile_shadows(profile_game, profile.t_df_shadows);
+    inst_.hiz_buffer.swap_layer();
+    /* Update for lighting pass or AO node. */
+    inst_.hiz_buffer.update();
 
-  inst_.volume_probes.set_view(render_view);
-  inst_.sphere_probes.set_view(render_view);
-  inst_.shadows.render(render_view, extent);
+    inst_.volume_probes.set_view(render_view);
+    inst_.sphere_probes.set_view(render_view);
+    inst_.shadows.render(render_view, extent);
+  }
 
-  inst_.gbuffer.bind(gbuffer_fb);
-  inst_.manager->submit(gbuffer_ps_, render_view);
+  {
+    DRWGameProfileTimer _profile_gbuffer(profile_game, profile.t_df_gbuffer);
+    inst_.gbuffer.bind(gbuffer_fb);
+    inst_.manager->submit(gbuffer_ps_, render_view);
+  }
 
   direct_radiance_txs_.acquire_2d_array(
       extent, closure_count_, gpu::TextureFormat::DEFERRED_RADIANCE_FORMAT, usage_rw);
   direct_radiance_txs_.ensure_layer_views();
 
-  if (use_raytracing_) {
-    indirect_result_ = inst_.raytracing.render(
-        rt_buffer, radiance_behind_tx, closure_bits_, render_view);
-  }
-  else if (use_split_radiance_) {
-    indirect_result_ = inst_.raytracing.alloc_only(rt_buffer);
-  }
-  else {
-    indirect_result_ = inst_.raytracing.alloc_dummy(rt_buffer);
-  }
+  {
+    DRWGameProfileTimer _profile_eval(profile_game, profile.t_df_eval_light);
+    if (use_raytracing_) {
+      indirect_result_ = inst_.raytracing.render(
+          rt_buffer, radiance_behind_tx, closure_bits_, render_view);
+    }
+    else if (use_split_radiance_) {
+      indirect_result_ = inst_.raytracing.alloc_only(rt_buffer);
+    }
+    else {
+      indirect_result_ = inst_.raytracing.alloc_dummy(rt_buffer);
+    }
 
-  GPU_framebuffer_bind(combined_fb);
-  inst_.manager->submit(eval_light_ps_, render_view);
+    GPU_framebuffer_bind(combined_fb);
+    inst_.manager->submit(eval_light_ps_, render_view);
 
-  inst_.subsurface.render(
-      direct_radiance_txs_, indirect_result_.closures[0], closure_bits_, render_view);
+    inst_.subsurface.render(
+        direct_radiance_txs_, indirect_result_.closures[0], closure_bits_, render_view);
+  }
 
   /* UPBGE: Shadow denoising. Temporally accumulate then filter the direct radiance before the
    * combine pass consumes it. */
-  if (denoise_synced_) {
-    constexpr eGPUTextureUsage history_usage = GPU_TEXTURE_USAGE_SHADER_READ |
-                                               GPU_TEXTURE_USAGE_SHADER_WRITE;
-    bool recreated = false;
-    for (int i = 0; i < 2; i++) {
-      recreated |= shadow_history_txs_[i].ensure_2d_array(
-          gpu::TextureFormat::SFLOAT_16_16_16_16, extent, 3, history_usage);
+  {
+    DRWGameProfileTimer _profile_denoise(profile_game, profile.t_df_denoise);
+    if (denoise_synced_) {
+      constexpr eGPUTextureUsage history_usage = GPU_TEXTURE_USAGE_SHADER_READ |
+                                                 GPU_TEXTURE_USAGE_SHADER_WRITE;
+      bool recreated = false;
+      for (int i = 0; i < 2; i++) {
+        recreated |= shadow_history_txs_[i].ensure_2d_array(
+            gpu::TextureFormat::SFLOAT_16_16_16_16, extent, 3, history_usage);
+      }
+      if (recreated || !shadow_history_valid_) {
+        /* Clear the history read this frame: alpha 0 invalidates all reprojected taps. */
+        shadow_history_txs_[shadow_history_index_].clear(float4(0.0f));
+      }
+
+      /* Must match SHADOW_DENOISE_GROUP_SIZE in eevee_shadow_denoise.bsl.hh. */
+      shadow_denoise_dispatch_size_ = int3(math::divide_ceil(extent, int2(8)), 1);
+      inst_.manager->submit(shadow_denoise_temporal_ps_, render_view);
+      inst_.manager->submit(shadow_denoise_bilateral_ps_, render_view);
+
+      /* Swap the history ping-pong for the next frame. */
+      shadow_history_index_ ^= 1;
+      shadow_history_valid_ = true;
     }
-    if (recreated || !shadow_history_valid_) {
-      /* Clear the history read this frame: alpha 0 invalidates all reprojected taps. */
-      shadow_history_txs_[shadow_history_index_].clear(float4(0.0f));
+    else {
+      shadow_history_valid_ = false;
+    }
+  }
+
+  {
+    DRWGameProfileTimer _profile_combine(profile_game, profile.t_df_combine);
+    radiance_feedback_tx_ = rt_buffer.feedback_ensure(!use_feedback_output_, extent);
+
+    if (use_feedback_output_ && use_clamp_direct_) {
+      /* We need to do a copy before the combine pass (otherwise we have a dependency issue) to
+       * save the emission and the previous layer's radiance. */
+      GPU_texture_copy(radiance_feedback_tx_, rb.combined_tx);
     }
 
-    /* Must match SHADOW_DENOISE_GROUP_SIZE in eevee_shadow_denoise.bsl.hh. */
-    shadow_denoise_dispatch_size_ = int3(math::divide_ceil(extent, int2(8)), 1);
-    inst_.manager->submit(shadow_denoise_temporal_ps_, render_view);
-    inst_.manager->submit(shadow_denoise_bilateral_ps_, render_view);
+    GPU_framebuffer_bind(combined_fb);
+    inst_.manager->submit(combine_ps_, render_view);
 
-    /* Swap the history ping-pong for the next frame. */
-    shadow_history_index_ ^= 1;
-    shadow_history_valid_ = true;
-  }
-  else {
-    shadow_history_valid_ = false;
-  }
-
-  radiance_feedback_tx_ = rt_buffer.feedback_ensure(!use_feedback_output_, extent);
-
-  if (use_feedback_output_ && use_clamp_direct_) {
-    /* We need to do a copy before the combine pass (otherwise we have a dependency issue) to save
-     * the emission and the previous layer's radiance. */
-    GPU_texture_copy(radiance_feedback_tx_, rb.combined_tx);
-  }
-
-  GPU_framebuffer_bind(combined_fb);
-  inst_.manager->submit(combine_ps_, render_view);
-
-  if (use_feedback_output_ && !use_clamp_direct_) {
-    /* We skip writing the radiance during the combine pass. Do a simple fast copy. */
-    GPU_texture_copy(radiance_feedback_tx_, rb.combined_tx);
+    if (use_feedback_output_ && !use_clamp_direct_) {
+      /* We skip writing the radiance during the combine pass. Do a simple fast copy. */
+      GPU_texture_copy(radiance_feedback_tx_, rb.combined_tx);
+    }
   }
 
   indirect_result_.release();

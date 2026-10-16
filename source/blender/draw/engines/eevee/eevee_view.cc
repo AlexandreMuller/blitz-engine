@@ -76,6 +76,10 @@ void ShadingView::render()
     return;
   }
 
+  /* UPBGE Fase 3: per-stage breakdown of this view's render. */
+  DRWGameProfileStats &profile = DRW_game_profile_get();
+  const bool profile_game = profile.enabled;
+
   update_view();
   inst_.shadows.set_view(render_view_, extent_);
   inst_.volume.set_view(main_view_, extent_);
@@ -94,91 +98,113 @@ void ShadingView::render()
   DRW_gsplat_ensure_radiance(*inst_.manager, render_view_);
 
   RenderBuffers &rbufs = inst_.render_buffers;
-  rbufs.acquire(extent_);
-
-  combined_fb_.ensure(GPU_ATTACHMENT_TEXTURE(rbufs.depth_tx),
-                      GPU_ATTACHMENT_TEXTURE(rbufs.combined_tx));
-
   const bool with_raycast = inst_.pipelines.has_raycast;
-  prepass_fb_.ensure(
-      GPU_ATTACHMENT_TEXTURE(rbufs.depth_tx),
-      with_raycast ? GPU_ATTACHMENT_TEXTURE(rbufs.prepass_normal_tx) : GPU_ATTACHMENT_NONE,
-      with_raycast ? GPU_ATTACHMENT_TEXTURE(rbufs.object_id_tx) : GPU_ATTACHMENT_NONE,
-      GPU_ATTACHMENT_TEXTURE(rbufs.vector_tx));
-
   GBuffer &gbuf = inst_.gbuffer;
-  gbuf.acquire(extent_,
-               inst_.pipelines.deferred.header_layer_count(),
-               inst_.pipelines.deferred.closure_layer_count(),
-               inst_.pipelines.deferred.normal_layer_count());
+  {
+    DRWGameProfileTimer _profile_acquire(profile_game, profile.t_sv_setup);
+    rbufs.acquire(extent_);
 
-  gbuffer_fb_.ensure(GPU_ATTACHMENT_TEXTURE(rbufs.depth_tx),
-                     GPU_ATTACHMENT_TEXTURE(rbufs.combined_tx),
-                     GPU_ATTACHMENT_TEXTURE_LAYER(gbuf.header_tx.layer_view(0), 0),
-                     GPU_ATTACHMENT_TEXTURE_LAYER(gbuf.normal_tx.layer_view(0), 0),
-                     GPU_ATTACHMENT_TEXTURE_LAYER(gbuf.closure_tx.layer_view(0), 0),
-                     GPU_ATTACHMENT_TEXTURE_LAYER(gbuf.closure_tx.layer_view(1), 0));
+    combined_fb_.ensure(GPU_ATTACHMENT_TEXTURE(rbufs.depth_tx),
+                        GPU_ATTACHMENT_TEXTURE(rbufs.combined_tx));
 
-  /* If camera has any motion, compute motion vector in the film pass. Otherwise, we avoid float
-   * precision issue by setting the motion of all static geometry to 0. */
-  /* TODO: Clear using GPU_framebuffer. */
-  float4 clear_velocity = float4(inst_.velocity.camera_has_motion() ? VELOCITY_INVALID : 0.0f);
-  GPU_texture_clear(rbufs.vector_tx, GPU_DATA_FLOAT, &clear_velocity);
-  if (with_raycast) {
-    rbufs.object_id_tx.clear(uint4(0));
-    rbufs.prepass_normal_tx.clear(float4(0.0f));
+    prepass_fb_.ensure(
+        GPU_ATTACHMENT_TEXTURE(rbufs.depth_tx),
+        with_raycast ? GPU_ATTACHMENT_TEXTURE(rbufs.prepass_normal_tx) : GPU_ATTACHMENT_NONE,
+        with_raycast ? GPU_ATTACHMENT_TEXTURE(rbufs.object_id_tx) : GPU_ATTACHMENT_NONE,
+        GPU_ATTACHMENT_TEXTURE(rbufs.vector_tx));
+
+    gbuf.acquire(extent_,
+                 inst_.pipelines.deferred.header_layer_count(),
+                 inst_.pipelines.deferred.closure_layer_count(),
+                 inst_.pipelines.deferred.normal_layer_count());
+
+    gbuffer_fb_.ensure(GPU_ATTACHMENT_TEXTURE(rbufs.depth_tx),
+                       GPU_ATTACHMENT_TEXTURE(rbufs.combined_tx),
+                       GPU_ATTACHMENT_TEXTURE_LAYER(gbuf.header_tx.layer_view(0), 0),
+                       GPU_ATTACHMENT_TEXTURE_LAYER(gbuf.normal_tx.layer_view(0), 0),
+                       GPU_ATTACHMENT_TEXTURE_LAYER(gbuf.closure_tx.layer_view(0), 0),
+                       GPU_ATTACHMENT_TEXTURE_LAYER(gbuf.closure_tx.layer_view(1), 0));
+
+    /* If camera has any motion, compute motion vector in the film pass. Otherwise, we avoid
+     * float precision issue by setting the motion of all static geometry to 0. */
+    /* TODO: Clear using GPU_framebuffer. */
+    float4 clear_velocity = float4(inst_.velocity.camera_has_motion() ? VELOCITY_INVALID : 0.0f);
+    GPU_texture_clear(rbufs.vector_tx, GPU_DATA_FLOAT, &clear_velocity);
+    if (with_raycast) {
+      rbufs.object_id_tx.clear(uint4(0));
+      rbufs.prepass_normal_tx.clear(float4(0.0f));
+    }
+
+    GPU_framebuffer_bind(combined_fb_);
+    /* Alpha stores transmittance. So start at 1. */
+    GPU_framebuffer_clear_color_depth(
+        combined_fb_, {0.0, 0.0, 0.0, 1.0}, inst_.film.depth.clear_value);
   }
 
-  GPU_framebuffer_bind(combined_fb_);
-  /* Alpha stores transmittance. So start at 1. */
-  GPU_framebuffer_clear_color_depth(
-      combined_fb_, {0.0, 0.0, 0.0, 1.0}, inst_.film.depth.clear_value);
-  if (DRW_context_get()->is_background_drawing()) { //UPBGE: for overlay pass
-    inst_.pipelines.background.clear(render_view_);
+  {
+    DRWGameProfileTimer _profile_lights(profile_game, profile.t_sv_lights);
+    if (DRW_context_get()->is_background_drawing()) { //UPBGE: for overlay pass
+      inst_.pipelines.background.clear(render_view_);
+    }
+
+    /* TODO(fclem): Move it after the first prepass (and hiz update) once pipeline is stabilized. */
+    inst_.lights.set_view(render_view_, extent_);
+
+    inst_.hiz_buffer.set_source(&inst_.render_buffers.depth_tx);
   }
 
-  /* TODO(fclem): Move it after the first prepass (and hiz update) once pipeline is stabilized. */
-  inst_.lights.set_view(render_view_, extent_);
-
-  inst_.hiz_buffer.set_source(&inst_.render_buffers.depth_tx);
-
-  inst_.volume.draw_prepass(main_view_);
-
-  inst_.pipelines.deferred.render(main_view_,
-                                  render_view_,
-                                  prepass_fb_,
-                                  combined_fb_,
-                                  gbuffer_fb_,
-                                  extent_,
-                                  rt_buffer_opaque_,
-                                  rt_buffer_refract_);
-
-  if (DRW_context_get()->is_background_drawing()) {  //UPBGE: for overlay pass
-    inst_.pipelines.background.render(render_view_, combined_fb_);
+  {
+    DRWGameProfileTimer _profile_volpre(profile_game, profile.t_sv_volume_pre);
+    inst_.volume.draw_prepass(main_view_);
   }
 
-  inst_.gbuffer.release();
+  {
+    DRWGameProfileTimer _profile_deferred(profile_game, profile.t_sv_deferred);
+    inst_.pipelines.deferred.render(main_view_,
+                                    render_view_,
+                                    prepass_fb_,
+                                    combined_fb_,
+                                    gbuffer_fb_,
+                                    extent_,
+                                    rt_buffer_opaque_,
+                                    rt_buffer_refract_);
 
-  inst_.volume.draw_compute(main_view_, extent_);
+    if (DRW_context_get()->is_background_drawing()) {  //UPBGE: for overlay pass
+      inst_.pipelines.background.render(render_view_, combined_fb_);
+    }
 
-  inst_.volume.draw_resolve(main_view_);
+    inst_.gbuffer.release();
+  }
 
-  inst_.ambient_occlusion.render_pass(render_view_);
+  {
+    DRWGameProfileTimer _profile_volume(profile_game, profile.t_sv_volume);
+    inst_.volume.draw_compute(main_view_, extent_);
+    inst_.volume.draw_resolve(main_view_);
+  }
 
-  inst_.pipelines.forward.render(
-      render_view_, rbufs.depth_tx, prepass_fb_, transparent_fb_, combined_fb_, extent_);
+  {
+    DRWGameProfileTimer _profile_ao(profile_game, profile.t_sv_ao);
+    inst_.ambient_occlusion.render_pass(render_view_);
+  }
 
-  inst_.lights.shape_display_draw(render_view_, combined_fb_);
+  {
+    DRWGameProfileTimer _profile_forward(profile_game, profile.t_sv_forward);
+    inst_.pipelines.forward.render(
+        render_view_, rbufs.depth_tx, prepass_fb_, transparent_fb_, combined_fb_, extent_);
+    inst_.lights.shape_display_draw(render_view_, combined_fb_);
+    inst_.lights.debug_draw(render_view_, combined_fb_);
+    inst_.hiz_buffer.debug_draw(render_view_, combined_fb_);
+    inst_.shadows.debug_draw(render_view_, combined_fb_);
+    inst_.volume_probes.viewport_draw(render_view_, combined_fb_);
+    inst_.sphere_probes.viewport_draw(render_view_, combined_fb_);
+    inst_.planar_probes.viewport_draw(render_view_, combined_fb_);
+  }
 
-  inst_.lights.debug_draw(render_view_, combined_fb_);
-  inst_.hiz_buffer.debug_draw(render_view_, combined_fb_);
-  inst_.shadows.debug_draw(render_view_, combined_fb_);
-  inst_.volume_probes.viewport_draw(render_view_, combined_fb_);
-  inst_.sphere_probes.viewport_draw(render_view_, combined_fb_);
-  inst_.planar_probes.viewport_draw(render_view_, combined_fb_);
-
-  gpu::Texture *combined_final_tx = render_postfx(rbufs.combined_tx);
-  inst_.film.accumulate(jitter_view_, combined_final_tx);
+  {
+    DRWGameProfileTimer _profile_postfx(profile_game, profile.t_sv_postfx_film);
+    gpu::Texture *combined_final_tx = render_postfx(rbufs.combined_tx);
+    inst_.film.accumulate(jitter_view_, combined_final_tx);
+  }
 
   rbufs.release();
   postfx_tx_.release();

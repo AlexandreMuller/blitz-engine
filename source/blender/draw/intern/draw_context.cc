@@ -3320,6 +3320,10 @@ void DRWGameProfileStats::reset_frame()
   t_sync_init_begin = t_sync_objects = t_sync_end = 0.0f;
   t_eevee_init = t_eevee_begin_sync = t_eevee_object_sync = t_eevee_end_sync = 0.0f;
   t_rs_probes = t_rs_main_view = t_rs_misc = 0.0f;
+  t_sv_setup = t_sv_lights = t_sv_volume_pre = t_sv_deferred = t_sv_volume = t_sv_ao =
+      t_sv_forward = t_sv_postfx_film = 0.0f;
+  t_df_setup = t_df_shadows = t_df_gbuffer = t_df_eval_light = t_df_denoise = t_df_combine =
+      0.0f;
   t_kx_tag_loop = t_kx_tag_eval = t_kx_depsgraph = t_kx_2dfilter_blit = 0.0f;
   n_objects_iter = n_objects_populated = n_kx_objects = 0;
   n_frustum_in = n_frustum_out = 0;
@@ -3367,6 +3371,26 @@ void DRWGameProfileStats::dump_frame()
           t_rs_probes * 1e3f * inv,
           t_rs_main_view * 1e3f * inv,
           t_rs_misc * 1e3f * inv);
+  fprintf(out,
+          "[view]          acquire %.3f | lights/hiz %.3f | vol_pre %.3f | deferred %.3f | volume "
+          "%.3f | ao %.3f | fwd+dbg %.3f | postfx+film %.3f\n",
+          t_sv_setup * 1e3f * inv,
+          t_sv_lights * 1e3f * inv,
+          t_sv_volume_pre * 1e3f * inv,
+          t_sv_deferred * 1e3f * inv,
+          t_sv_volume * 1e3f * inv,
+          t_sv_ao * 1e3f * inv,
+          t_sv_forward * 1e3f * inv,
+          t_sv_postfx_film * 1e3f * inv);
+  fprintf(out,
+          "[deferred]      setup %.3f | shadows %.3f | gbuffer %.3f | eval_light %.3f | denoise "
+          "%.3f | combine %.3f\n",
+          t_df_setup * 1e3f * inv,
+          t_df_shadows * 1e3f * inv,
+          t_df_gbuffer * 1e3f * inv,
+          t_df_eval_light * 1e3f * inv,
+          t_df_denoise * 1e3f * inv,
+          t_df_combine * 1e3f * inv);
   fprintf(out, "[2dfilter+blit] %.3f ms\n", t_kx_2dfilter_blit * 1e3f * inv);
   fprintf(out,
           "[counts]        kx_objects %lld | iter %lld | populated %lld | samples %d | passes "
