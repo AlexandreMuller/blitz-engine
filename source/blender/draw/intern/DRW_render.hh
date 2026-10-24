@@ -479,6 +479,15 @@ void DRW_game_render_loop(struct bContext *C,
                           const struct rcti *window,
                           bool is_overlay_pass);
 
+/** True while executing inside DRW_game_render_loop (game render path, main or overlay pass).
+ * Used to gate game-only EEVEE behavior (e.g. Fase B1 temporal accumulation resets). */
+bool DRW_game_render_loop_is_active();
+
+/** UPBGE Fase B1: true when BGE_TAA_RESET=1 (restore legacy per-frame TAA accumulation resets
+ * and the convergence freeze in game). Default (unset or 0) keeps temporal accumulation alive
+ * during camera motion and depsgraph updates. */
+bool DRW_bge_taa_legacy_reset();
+
 void DRW_game_python_loop_end(struct ViewLayer *view_layer);
 
 /* Game render loop instrumentation (UPBGE/Blitz-Engine).
@@ -544,6 +553,12 @@ struct DRWGameProfileStats {
   float shadow_expand = -1.0f;
   /* How many lamps EEVEE's object_sync actually receives per frame (Fase 2c diagnostics). */
   int64_t n_eevee_synced_lights = 0;
+  /* Fase B1 diagnostics: how often each sampling.reset() trigger fired per frame
+   * (camera_has_motion / depsgraph update count) and the resulting sampling state. */
+  float n_taa_reset_camera = 0.0f;
+  float n_taa_reset_depsgraph = 0.0f;
+  float bge_viewport_sample = 0.0f;
+  float bge_interactive_mode = 0.0f;
 
   void reset_frame();
   void dump_frame();
