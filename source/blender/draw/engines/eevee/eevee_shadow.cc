@@ -8,6 +8,8 @@
  * The shadow module manages shadow update tagging & shadow rendering.
  */
 
+#include <cstdlib> /* getenv (UPBGE Fase B2: BGE_SHADOW_CLIPMAP_HALFRATE). */
+
 #include "BLI_math_matrix.hh"
 #include "GPU_batch_utils.hh"
 #include "GPU_capabilities.hh"
@@ -21,6 +23,24 @@
 #include "draw_debug.hh"
 
 namespace blender::eevee {
+
+/* UPBGE Fase B2: half-rate clipmap updates for games (BGE_SHADOW_CLIPMAP_HALFRATE=1).
+ * On alternating frames the clipmap grid does not follow the camera, so no border tiles are
+ * tagged for shadow re-render (the dominant moving-camera shadow cost, see
+ * docs/PLANO_PERFORMANCE_CAMERA_MOVEL.md section 1.3). The clipmap trails the camera by at
+ * most one frame of movement. Parity is bumped once per frame in ShadowModule::begin_sync. */
+static bool bge_shadow_clipmap_halfrate()
+{
+  static const bool enabled = []() {
+    const char *env = getenv("BGE_SHADOW_CLIPMAP_HALFRATE");
+    return env &&
+           (env[0] == '1' || env[0] == 't' || env[0] == 'T' || env[0] == 'y' || env[0] == 'Y');
+  }();
+  return enabled;
+}
+/* Starts at -1 so the first rendered frame (after the first begin_sync bump) is parity 0 and
+ * never frozen: the initial clipmap distribution is always applied immediately. */
+static int g_bge_shadow_frame_parity = -1;
 
 /* -------------------------------------------------------------------- */
 /** \name Tile map
@@ -43,8 +63,16 @@ void ShadowTileMap::sync_orthographic(const float4x4 &object_mat_,
   light_type = eLightType::LIGHT_SUN;
   shadow_set_membership = shadow_set_membership_;
 
-  grid_shift = origin_offset - grid_offset;
-  grid_offset = origin_offset;
+  if (bge_shadow_clipmap_halfrate() && (g_bge_shadow_frame_parity & 1)) {
+    /* Freeze the grid this frame: no border tiles tagged for update, the clipmap trails the
+     * camera by at most one frame of movement. The accumulated delta is applied on the next
+     * (unfrozen) frame by the origin_offset - grid_offset difference. */
+    grid_shift = int2(0);
+  }
+  else {
+    grid_shift = origin_offset - grid_offset;
+    grid_offset = origin_offset;
+  }
 
   if (!equals_m4m4(object_mat.ptr(), object_mat_.ptr())) {
     object_mat = object_mat_;
@@ -684,6 +712,9 @@ void ShadowModule::init()
 
 void ShadowModule::begin_sync()
 {
+  /* UPBGE Fase B2: bump the frame parity used by the clipmap half-rate option. */
+  g_bge_shadow_frame_parity++;
+
   past_casters_updated_.clear();
   curr_casters_updated_.clear();
   curr_casters_.clear();
