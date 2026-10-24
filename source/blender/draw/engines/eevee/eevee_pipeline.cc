@@ -1005,7 +1005,6 @@ void DeferredLayer::end_sync(bool is_first_pass,
                                (rbuf_data.specular_light_id != -1) ||
                                    (rbuf_data.specular_color_id != -1));
       pass.specialize_constant(sh, "use_split_radiance", use_split_radiance_);
-      pass.specialize_constant(sh, "use_shadow_denoise", use_shadow_denoise_);
       pass.specialize_constant(
           sh, "use_radiance_feedback", use_feedback_output_ && use_clamp_direct_);
       pass.specialize_constant(sh, "render_pass_normal_enabled", rbuf_data.normal_id != -1);
@@ -1044,62 +1043,8 @@ void DeferredLayer::end_sync(bool is_first_pass,
       pass.barrier(GPU_BARRIER_TEXTURE_FETCH | GPU_BARRIER_SHADER_IMAGE_ACCESS);
       pass.draw_procedural(GPU_PRIM_TRIS, 1, 3);
     }
-    /* UPBGE: Shadow denoising passes. Run between the light evaluation and the combine pass.
-     * The temporal pass reprojects and accumulates the direct radiance into a persistent
-     * history (independent from TAA), the bilateral pass filters the accumulated signal and
-     * writes it back into the direct radiance buffers read by the combine pass. */
-    /* The pool texture is only acquired during render(). Skip denoising on the first frame:
-     * there is no acquired texture yet (ensure_layer_views() would dereference nullptr) and
-     * no valid history to reproject anyway. */
-    denoise_synced_ = use_shadow_denoise_ && direct_radiance_txs_.gpu_texture() != nullptr;
-    if (denoise_synced_) {
-      RenderBuffers &rbuffers = inst_.render_buffers;
-      VelocityModule &velocity = inst_.velocity;
-      const int closure_count = min_ii(closure_count_, 3);
-      /* For viewport, only previous motion is supported.
-       * Still bind previous step to avoid undefined behavior. */
-      eVelocityStep step_next = inst_.is_viewport() ? STEP_PREVIOUS : STEP_NEXT;
-      {
-        PassSimple &pass = shadow_denoise_temporal_ps_;
-        pass.init();
-        gpu::Shader *sh = inst_.shaders.static_shader_get(SHADOW_DENOISE_TEMPORAL);
-        pass.specialize_constant(sh, "closure_count", closure_count);
-        pass.shader_set(sh);
-        /* UPBGE: Upstream merged the 3 direct radiance textures into a single array texture.
-         * Create per-layer 2D views for the denoise passes. */
-        direct_radiance_txs_.ensure_layer_views();
-        pass.bind_texture("direct_radiance_1_tx", direct_radiance_txs_.layer_view(0));
-        pass.bind_texture("direct_radiance_2_tx", direct_radiance_txs_.layer_view(1));
-        pass.bind_texture("direct_radiance_3_tx", direct_radiance_txs_.layer_view(2));
-        pass.bind_texture("depth_tx", &rbuffers.depth_tx);
-        pass.bind_texture("vector_tx", &rbuffers.vector_tx);
-        pass.bind_texture("history_tx", &shadow_history_txs_[shadow_history_index_]);
-        pass.bind_image("out_history_img", &shadow_history_txs_[shadow_history_index_ ^ 1]);
-        pass.bind_ubo("camera_prev", &(*velocity.camera_steps[STEP_PREVIOUS]));
-        pass.bind_ubo("camera_curr", &(*velocity.camera_steps[STEP_CURRENT]));
-        pass.bind_ubo("camera_next", &(*velocity.camera_steps[step_next]));
-        pass.bind_resources(inst_.gbuffer);
-        /* Make the light evaluation image writes visible to the texture fetches. */
-        pass.barrier(GPU_BARRIER_TEXTURE_FETCH);
-        pass.dispatch(&shadow_denoise_dispatch_size_);
-        pass.barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS | GPU_BARRIER_TEXTURE_FETCH);
-      }
-      {
-        PassSimple &pass = shadow_denoise_bilateral_ps_;
-        pass.init();
-        gpu::Shader *sh = inst_.shaders.static_shader_get(SHADOW_DENOISE_BILATERAL);
-        pass.specialize_constant(sh, "closure_count", closure_count);
-        pass.shader_set(sh);
-        pass.bind_texture("history_tx", &shadow_history_txs_[shadow_history_index_ ^ 1]);
-        pass.bind_texture("depth_tx", &rbuffers.depth_tx);
-        pass.bind_image("direct_radiance_1_img", direct_radiance_txs_.layer_view(0));
-        pass.bind_image("direct_radiance_2_img", direct_radiance_txs_.layer_view(1));
-        pass.bind_image("direct_radiance_3_img", direct_radiance_txs_.layer_view(2));
-        pass.bind_resources(inst_.gbuffer);
-        pass.dispatch(&shadow_denoise_dispatch_size_);
-        pass.barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS | GPU_BARRIER_TEXTURE_FETCH);
-      }
-    }
+    /* NOTE: The shadow denoising passes are built and submitted during render() (see below),
+     * after the pool texture acquisition, so they also run on the first frame. */
   }
 }
 
@@ -1219,27 +1164,110 @@ gpu::Texture *DeferredLayer::render(View &render_view,
         direct_radiance_txs_, indirect_result_.closures[0], closure_bits_, render_view);
   }
 
-  /* UPBGE: Shadow denoising. Temporally accumulate then filter the direct radiance before the
-   * combine pass consumes it. */
+  /* UPBGE: SVGF-lite shadow denoising, between the light evaluation and the combine pass.
+   * The temporal pass reprojects and accumulates the direct radiance and its luminance
+   * moments into a persistent history (independent from TAA). The a-trous passes then filter
+   * the accumulated signal with 4 variance-guided iterations (strides 1/2/4/8) and the last
+   * one writes the result back into the direct radiance buffers read by the combine pass.
+   * The passes are built here, after the pool texture acquisition, so the denoiser also runs
+   * on the first frame (the moments fallback in the temporal pass keeps the spatial filter
+   * active even with no valid history). */
   {
     DRWGameProfileTimer _profile_denoise(profile_game, profile.t_df_denoise);
+    denoise_synced_ = use_shadow_denoise_;
     if (denoise_synced_) {
+      RenderBuffers &rbuffers = inst_.render_buffers;
+      VelocityModule &velocity = inst_.velocity;
+      const int closure_count = min_ii(closure_count_, 3);
+      /* For viewport, only previous motion is supported.
+       * Still bind previous step to avoid undefined behavior. */
+      eVelocityStep step_next = inst_.is_viewport() ? STEP_PREVIOUS : STEP_NEXT;
+
       constexpr eGPUTextureUsage history_usage = GPU_TEXTURE_USAGE_SHADER_READ |
                                                  GPU_TEXTURE_USAGE_SHADER_WRITE;
       bool recreated = false;
       for (int i = 0; i < 2; i++) {
         recreated |= shadow_history_txs_[i].ensure_2d_array(
             gpu::TextureFormat::SFLOAT_16_16_16_16, extent, 3, history_usage);
+        recreated |= shadow_history_moments_txs_[i].ensure_2d_array(
+            gpu::TextureFormat::SFLOAT_16_16_16_16, extent, 3, history_usage);
+        recreated |= shadow_atrous_scratch_txs_[i].ensure_2d_array(
+            gpu::TextureFormat::SFLOAT_16_16_16_16, extent, 3, history_usage);
       }
       if (recreated || !shadow_history_valid_) {
-        /* Clear the history read this frame: alpha 0 invalidates all reprojected taps. */
+        /* Clear the history read this frame: alpha 0 (radiance) / length 0 (moments)
+         * invalidate all reprojected taps. */
         shadow_history_txs_[shadow_history_index_].clear(float4(0.0f));
+        shadow_history_moments_txs_[shadow_history_index_].clear(float4(0.0f));
       }
 
       /* Must match SHADOW_DENOISE_GROUP_SIZE in eevee_shadow_denoise.bsl.hh. */
       shadow_denoise_dispatch_size_ = int3(math::divide_ceil(extent, int2(8)), 1);
-      inst_.manager->submit(shadow_denoise_temporal_ps_, render_view);
-      inst_.manager->submit(shadow_denoise_bilateral_ps_, render_view);
+
+      /* The direct radiance array only has closure_count layers, so bins beyond it alias
+       * layer 0: the shaders never fetch them (specialized by closure_count) but every
+       * declared resource must be bound. */
+      const int dr_layer_1 = (closure_count > 1) ? 1 : 0;
+      const int dr_layer_2 = (closure_count > 2) ? 2 : 0;
+
+      {
+        PassSimple &pass = shadow_denoise_temporal_ps_;
+        pass.init();
+        gpu::Shader *sh = inst_.shaders.static_shader_get(SHADOW_DENOISE_TEMPORAL);
+        pass.specialize_constant(sh, "closure_count", closure_count);
+        pass.shader_set(sh);
+        /* UPBGE: Upstream merged the 3 direct radiance textures into a single array texture.
+         * Create per-layer 2D views for the denoise passes. */
+        direct_radiance_txs_.ensure_layer_views();
+        pass.bind_texture("direct_radiance_1_tx", direct_radiance_txs_.layer_view(0));
+        pass.bind_texture("direct_radiance_2_tx", direct_radiance_txs_.layer_view(dr_layer_1));
+        pass.bind_texture("direct_radiance_3_tx", direct_radiance_txs_.layer_view(dr_layer_2));
+        pass.bind_texture("depth_tx", &rbuffers.depth_tx);
+        pass.bind_texture("vector_tx", &rbuffers.vector_tx);
+        pass.bind_texture("history_tx", &shadow_history_txs_[shadow_history_index_]);
+        pass.bind_texture("history_moments_tx",
+                          &shadow_history_moments_txs_[shadow_history_index_]);
+        pass.bind_image("out_history_img", &shadow_history_txs_[shadow_history_index_ ^ 1]);
+        pass.bind_image("out_history_moments_img",
+                        &shadow_history_moments_txs_[shadow_history_index_ ^ 1]);
+        pass.bind_ubo("camera_prev", &(*velocity.camera_steps[STEP_PREVIOUS]));
+        pass.bind_ubo("camera_curr", &(*velocity.camera_steps[STEP_CURRENT]));
+        pass.bind_ubo("camera_next", &(*velocity.camera_steps[step_next]));
+        pass.bind_resources(inst_.gbuffer);
+        /* Make the light evaluation image writes visible to the texture fetches. */
+        pass.barrier(GPU_BARRIER_TEXTURE_FETCH);
+        pass.dispatch(&shadow_denoise_dispatch_size_);
+        pass.barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS | GPU_BARRIER_TEXTURE_FETCH);
+        inst_.manager->submit(pass, render_view);
+      }
+      /* 4 a-trous iterations, ping-ponging through the scratch buffers. The first reads the
+       * temporally accumulated radiance + moments; the last writes the direct radiance
+       * buffers; the intermediate ones read and write the scratch buffers. */
+      for (int i = 0; i < 4; i++) {
+        const bool is_final = (i == 3);
+        PassSimple &pass = shadow_denoise_atrous_ps_[i];
+        pass.init();
+        gpu::Shader *sh = inst_.shaders.static_shader_get(SHADOW_DENOISE_ATROUS);
+        pass.specialize_constant(sh, "closure_count", closure_count);
+        pass.specialize_constant(sh, "atrous_stride", 1 << i);
+        pass.specialize_constant(sh, "atrous_final", is_final);
+        pass.shader_set(sh);
+        Texture &in_radiance_tx = (i == 0) ? shadow_history_txs_[shadow_history_index_ ^ 1] :
+                                             shadow_atrous_scratch_txs_[(i - 1) & 1];
+        pass.bind_texture("in_radiance_tx", &in_radiance_tx);
+        pass.bind_texture("in_moments_tx",
+                          &shadow_history_moments_txs_[shadow_history_index_ ^ 1]);
+        pass.bind_texture("depth_tx", &rbuffers.depth_tx);
+        pass.bind_image("direct_radiance_1_img", direct_radiance_txs_.layer_view(0));
+        pass.bind_image("direct_radiance_2_img", direct_radiance_txs_.layer_view(dr_layer_1));
+        pass.bind_image("direct_radiance_3_img", direct_radiance_txs_.layer_view(dr_layer_2));
+        pass.bind_image("out_scratch_img", &shadow_atrous_scratch_txs_[i & 1]);
+        pass.bind_resources(inst_.gbuffer);
+        pass.dispatch(&shadow_denoise_dispatch_size_);
+        /* Make each iteration's writes visible to the next one's fetches. */
+        pass.barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS | GPU_BARRIER_TEXTURE_FETCH);
+        inst_.manager->submit(pass, render_view);
+      }
 
       /* Swap the history ping-pong for the next frame. */
       shadow_history_index_ ^= 1;

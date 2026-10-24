@@ -374,13 +374,25 @@ class DeferredLayer : DeferredLayerBase {
   /* Combine direct and indirect light contributions and apply BSDF color. */
   PassSimple combine_ps_ = {"Combine"};
 
-  /* UPBGE: Shadow denoising passes. Temporal accumulation of the direct (shadowed) radiance,
-   * independent from the TAA/film accumulation, followed by a final separated bilateral filter. */
+  /* UPBGE: SVGF-lite shadow denoising passes. Temporal accumulation of the direct (shadowed)
+   * radiance (with luminance moments), independent from the TAA/film accumulation, followed by
+   * 4 iterations of a variance-guided a-trous filter (strides 1/2/4/8). */
   PassSimple shadow_denoise_temporal_ps_ = {"ShadowDenoiseTemporal"};
-  PassSimple shadow_denoise_bilateral_ps_ = {"ShadowDenoiseBilateral"};
+  PassSimple shadow_denoise_atrous_ps_[4] = {{"ShadowDenoiseAtrous0"},
+                                             {"ShadowDenoiseAtrous1"},
+                                             {"ShadowDenoiseAtrous2"},
+                                             {"ShadowDenoiseAtrous3"}};
   /* Persistent ping-pong history textures (one array layer per closure bin).
    * RGB = accumulated direct light, A = view depth (for disocclusion detection). */
   Texture shadow_history_txs_[2] = {Texture("shadow_history_a"), Texture("shadow_history_b")};
+  /* Moments history (one array layer per closure bin).
+   * R = m1 (luminance), G = m2 (luminance squared), B = history length. */
+  Texture shadow_history_moments_txs_[2] = {Texture("shadow_history_moments_a"),
+                                            Texture("shadow_history_moments_b")};
+  /* Scratch buffers ping-ponged by the a-trous iterations.
+   * RGB = radiance, A = filtered variance. */
+  Texture shadow_atrous_scratch_txs_[2] = {Texture("shadow_atrous_scratch_a"),
+                                           Texture("shadow_atrous_scratch_b")};
   /* Index of the history texture to read (reproject from) this frame. */
   int shadow_history_index_ = 0;
   /* True if the read history contains data from the previous frame. */
@@ -413,8 +425,9 @@ class DeferredLayer : DeferredLayerBase {
   bool use_split_radiance_ = true;
   /* UPBGE: Filter and temporally accumulate the direct radiance to remove shadow noise. */
   bool use_shadow_denoise_ = false;
-  /* UPBGE: True when the denoise passes were actually synced this frame. They are skipped on
-   * the first frame because the direct radiance pool texture is only acquired during render(). */
+  /* UPBGE: True when the denoise passes run this frame. Decided at render time: the passes
+   * are built after the direct radiance pool texture acquisition so they also run on the
+   * first frame. */
   bool denoise_synced_ = false;
   /* Output radiance from the combine shader instead of copy. Allow passing unclamped result. */
   bool use_feedback_output_ = false;
