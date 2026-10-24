@@ -289,13 +289,17 @@ void KX_KetsjiEngine::StartEngine()
   m_bInitialized = true;
 }
 
-/* UPBGE Fase 4 (experimental): render-ahead enabled via BGE_RENDER_AHEAD=1. */
+/* UPBGE Fase 4/C1: render-ahead is ON by default in game (latency -81%, fps +7% measured in
+ * Fase 4a). Opt-out with BGE_RENDER_AHEAD=0 for A/B or rollback. */
 bool KX_KetsjiEngine::UseRenderAhead()
 {
   static const bool enabled = []() {
     const char *env = getenv("BGE_RENDER_AHEAD");
-    return env &&
-           (env[0] == '1' || env[0] == 't' || env[0] == 'T' || env[0] == 'y' || env[0] == 'Y');
+    if (env == nullptr) {
+      return true;
+    }
+    return !(env[0] == '0' || env[0] == 'f' || env[0] == 'F' || env[0] == 'n' ||
+             env[0] == 'N');
   }();
   return enabled;
 }
