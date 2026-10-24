@@ -140,6 +140,12 @@ class Sampling {
            check_time_limit_reached();
   }
 
+  /* UPBGE Fase B1 diagnostics: current accumulation state for the game profiler. */
+  int64_t viewport_sample_get() const
+  {
+    return viewport_sample_;
+  }
+
   /* Returns true if viewport renderer is in interactive mode and should use TAA. */
   bool interactive_mode() const
   {

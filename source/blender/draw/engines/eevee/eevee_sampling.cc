@@ -23,6 +23,8 @@
 #include "eevee_instance.hh"
 #include "eevee_sampling.hh"
 
+#include "DRW_render.hh" /* UPBGE: game render loop state (Fase B1). */
+
 namespace blender::eevee {
 
 /* -------------------------------------------------------------------- */
@@ -141,6 +143,18 @@ void Sampling::end_sync()
 
     bool interactive_mode_disabled = (inst_.scene->eevee.flag & SCE_EEVEE_TAA_REPROJECTION) == 0 ||
                                      inst_.is_viewport_image_render;
+
+    /* UPBGE Fase B1: in the game render loop, never leave interactive (reprojection) mode.
+     * Otherwise, once temporal accumulation converges (viewport_sample_ >= sample_count_),
+     * finished_viewport() stays true and EEVEE stops re-rendering — the displayed image
+     * freezes while the camera keeps moving. Interactive mode keeps velocity reprojection
+     * (film + raytrace history) active and re-renders every frame. BGE_TAA_RESET=1 restores
+     * the legacy behavior. */
+    if (DRW_game_render_loop_is_active() && !DRW_bge_taa_legacy_reset()) {
+      interactive_mode_ = true;
+      interactive_mode_disabled = false;
+    }
+
     if (interactive_mode_disabled) {
       interactive_mode_ = false;
       sample_ = viewport_sample_;

@@ -3330,6 +3330,10 @@ void DRWGameProfileStats::reset_frame()
   n_eevee_synced_lights = 0;
   samples_per_frame = 0;
   camera_passes = 0;
+  n_taa_reset_camera = 0.0f;
+  n_taa_reset_depsgraph = 0.0f;
+  bge_viewport_sample = 0.0f;
+  bge_interactive_mode = 0.0f;
 }
 
 void DRWGameProfileStats::dump_frame()
@@ -3407,9 +3411,35 @@ void DRWGameProfileStats::dump_frame()
           100.0 * double(n_frustum_out) / double(max(int64_t(1), n_frustum_in + n_frustum_out)),
           shadow_expand);
   fprintf(out, "[lights]        eevee_synced %lld\n", (long long)(n_eevee_synced_lights * inv));
+  fprintf(out,
+          "[taa]           reset_camera %.2f | reset_depsgraph %.2f | viewport_sample %.1f | "
+          "interactive %.2f\n",
+          n_taa_reset_camera * inv,
+          n_taa_reset_depsgraph * inv,
+          bge_viewport_sample * inv,
+          bge_interactive_mode * inv);
   fflush(out);
   frame_count = 0;
   reset_frame();
+}
+
+/* UPBGE Fase B1: set for the duration of DRW_game_render_loop so engines can gate
+ * game-only behavior (see DRW_game_render_loop_is_active). */
+static bool g_bge_game_render_loop_active = false;
+
+bool DRW_game_render_loop_is_active()
+{
+  return g_bge_game_render_loop_active;
+}
+
+bool DRW_bge_taa_legacy_reset()
+{
+  static const bool legacy = []() {
+    const char *env = getenv("BGE_TAA_RESET");
+    return env &&
+           (env[0] == '1' || env[0] == 't' || env[0] == 'T' || env[0] == 'y' || env[0] == 'Y');
+  }();
+  return legacy;
 }
 
 void DRW_game_render_loop(bContext *C,
@@ -3419,6 +3449,7 @@ void DRW_game_render_loop(bContext *C,
                           bool is_overlay_pass)
 {
   using namespace blender::draw;
+  g_bge_game_render_loop_active = true;
   DRWGameProfileStats &profile = DRW_game_profile_get();
   Scene *scene = DEG_get_evaluated_scene(depsgraph);
 
@@ -3593,6 +3624,7 @@ void DRW_game_render_loop(bContext *C,
   }
 
   GPU_viewport_unbind(viewport);
+  g_bge_game_render_loop_active = false;
 }
 
 void DRW_game_viewport_render_loop_end()
