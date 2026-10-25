@@ -579,6 +579,7 @@ static void usage(const std::string &program, bool isBlenderPlayer)
   CM_Message("       ignore_deprecation_warnings    1         Ignore deprecation warnings"
              << std::endl);
   CM_Message("  -p: override python main loop script");
+  CM_Message("  --gpu-vsync <on|off|auto>: override the vsync mode (off is useful for benchmarking)");
   CM_Message(std::endl);
   CM_Message(
       "  - : all arguments after this are ignored, allowing python to access them from sys.argv");
@@ -1134,6 +1135,36 @@ int main(int argc,
       if (argv[i][1] == '\0') {
         argc_py_clamped = i;
         break;
+      }
+
+      /* UPBGE: support --gpu-vsync <on|off|auto> in the game player too (the creator flag
+       * only applies to blender.exe). Needed for deterministic benchmarking. */
+      if (strncmp(argv[i], "--gpu-vsync", 11) == 0) {
+        i++;
+        if (i <= validArguments) {
+          int vsync;
+          if (strcmp(argv[i], "on") == 0) {
+            vsync = 1;
+          }
+          else if (strcmp(argv[i], "off") == 0) {
+            vsync = 0;
+          }
+          else if (strcmp(argv[i], "auto") == 0) {
+            vsync = -1;
+          }
+          else {
+            error = true;
+            CM_Error("expected a value in [on, off, auto] for --gpu-vsync");
+            break;
+          }
+          GPU_backend_vsync_set_override(vsync);
+          i++;
+        }
+        else {
+          error = true;
+          CM_Error("no argument supplied for --gpu-vsync");
+        }
+        continue;
       }
 
       switch (argv[i][1]) {
