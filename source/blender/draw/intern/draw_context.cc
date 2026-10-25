@@ -6,6 +6,7 @@
  * \ingroup draw
  */
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
@@ -20,6 +21,7 @@
 #include "BLI_math_matrix_c.hh"
 #include "BLI_math_matrix_types.hh"
 #include "BLI_math_vector_c.hh"
+#include "BLI_path_utils.hh"
 #include "BLI_rect.hh"
 #include "BLI_string.hh"
 #include "BLI_sys_types.hh"
@@ -30,6 +32,7 @@
 
 #include "BLT_translation.hh"
 
+#include "BKE_appdir.hh"
 #include "BKE_camera.h"
 #include "BKE_compositor.hh"
 #include "BKE_context.hh"
@@ -3330,8 +3333,10 @@ void DRWGameProfileStats::reset_frame()
   n_eevee_synced_lights = 0;
   samples_per_frame = 0;
   camera_passes = 0;
-  n_taa_reset_camera = 0.0f;
-  n_taa_reset_depsgraph = 0.0f;
+  n_taa_cam_motion_trigger = 0.0f;
+  n_taa_cam_reset_applied = 0.0f;
+  n_taa_depsgraph_trigger = 0.0f;
+  n_taa_depsgraph_reset_applied = 0.0f;
   bge_viewport_sample = 0.0f;
   bge_interactive_mode = 0.0f;
 }
@@ -3412,15 +3417,108 @@ void DRWGameProfileStats::dump_frame()
           shadow_expand);
   fprintf(out, "[lights]        eevee_synced %lld\n", (long long)(n_eevee_synced_lights * inv));
   fprintf(out,
-          "[taa]           reset_camera %.2f | reset_depsgraph %.2f | viewport_sample %.1f | "
-          "interactive %.2f\n",
-          n_taa_reset_camera * inv,
-          n_taa_reset_depsgraph * inv,
+          "[taa]           cam_trigger %.2f | cam_reset %.2f | deg_trigger %.2f | deg_reset "
+          "%.2f | viewport_sample %.1f | interactive %.2f\n",
+          n_taa_cam_motion_trigger * inv,
+          n_taa_cam_reset_applied * inv,
+          n_taa_depsgraph_trigger * inv,
+          n_taa_depsgraph_reset_applied * inv,
           bge_viewport_sample * inv,
           bge_interactive_mode * inv);
   fflush(out);
   frame_count = 0;
   reset_frame();
+}
+
+/* UPBGE Fase 0 (PLANO_PERFORMANCE_GPU_ESCALABILIDADE §3.1): camera propagation chain trace.
+ * One JSON line per stage per frame, all sharing the same "f" frame id. Enabled with
+ * BGE_CAM_TRACE=<file.jsonl>. Deliberately independent from BGE_RENDER_PROFILE so the
+ * per-frame chain can be correlated with the per-frame benchmark JSONL from Python. */
+struct BGECamTrace {
+  bool init = false;
+  FILE *file = nullptr;
+  uint64_t frame = 0;
+};
+
+static BGECamTrace &bge_cam_trace_get()
+{
+  static BGECamTrace trace;
+  if (!trace.init) {
+    trace.init = true;
+    const char *env = getenv("BGE_CAM_TRACE");
+    if (env && env[0] != '\0') {
+      trace.file = fopen(env, "a");
+      if (trace.file) {
+        const char *exe_path = BKE_appdir_program_path();
+        fprintf(trace.file,
+                "{\"type\":\"header\",\"exe\":\"%s\",\"gpu\":\"%s\",\"driver\":\"%s\"}\n",
+                exe_path ? BLI_path_basename(exe_path) : "?",
+                GPU_platform_renderer(),
+                GPU_platform_version());
+        fflush(trace.file);
+      }
+    }
+  }
+  return trace;
+}
+
+/* FNV-1a over the 16 matrix elements quantized to 1e-4, so "did this stage change this frame"
+ * can be answered without logging full matrices. */
+static uint64_t bge_cam_mat_hash(const float *m16)
+{
+  uint64_t h = 1469598103934665603ULL;
+  for (int i = 0; i < 16; i++) {
+    int64_t q = int64_t(llroundf(m16[i] * 10000.0f));
+    for (int b = 0; b < 8; b++) {
+      h ^= uint64_t((q >> (b * 8)) & 0xff);
+      h *= 1099511628211ULL;
+    }
+  }
+  return h;
+}
+
+void DRW_bge_cam_trace_begin_frame(bool use_viewport_render)
+{
+  BGECamTrace &trace = bge_cam_trace_get();
+  if (!trace.file) {
+    return;
+  }
+  trace.frame++;
+  fprintf(trace.file,
+          "{\"f\":%llu,\"stage\":\"frame_begin\",\"flag\":%d}\n",
+          (unsigned long long)trace.frame,
+          use_viewport_render ? 1 : 0);
+  fflush(trace.file);
+}
+
+void DRW_bge_cam_trace_stage(const char *stage,
+                             const char *camera_name,
+                             const float *m16,
+                             bool dirty_or_flag,
+                             const char *extra_json)
+{
+  BGECamTrace &trace = bge_cam_trace_get();
+  if (!trace.file) {
+    return;
+  }
+  fprintf(trace.file,
+          "{\"f\":%llu,\"stage\":\"%s\",\"cam\":\"%s\"",
+          (unsigned long long)trace.frame,
+          stage,
+          camera_name ? camera_name : "");
+  if (m16) {
+    fprintf(trace.file,
+            ",\"pos\":[%.4f,%.4f,%.4f],\"mhash\":%llu",
+            m16[12],
+            m16[13],
+            m16[14],
+            (unsigned long long)bge_cam_mat_hash(m16));
+  }
+  fprintf(trace.file, ",\"flag\":%d", dirty_or_flag ? 1 : 0);
+  if (extra_json && extra_json[0] != '\0') {
+    fprintf(trace.file, ",%s", extra_json);
+  }
+  fprintf(trace.file, "}\n");
 }
 
 /* UPBGE Fase B1: set for the duration of DRW_game_render_loop so engines can gate

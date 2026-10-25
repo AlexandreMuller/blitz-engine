@@ -554,9 +554,13 @@ struct DRWGameProfileStats {
   /* How many lamps EEVEE's object_sync actually receives per frame (Fase 2c diagnostics). */
   int64_t n_eevee_synced_lights = 0;
   /* Fase B1 diagnostics: how often each sampling.reset() trigger fired per frame
-   * (camera_has_motion / depsgraph update count) and the resulting sampling state. */
-  float n_taa_reset_camera = 0.0f;
-  float n_taa_reset_depsgraph = 0.0f;
+   * (camera_has_motion / depsgraph update count) and the resulting sampling state.
+   * Fase 0 (GPU plan): split trigger detection from the reset actually applied,
+   * since B1 suppresses the reset during the game render loop. */
+  float n_taa_cam_motion_trigger = 0.0f;
+  float n_taa_cam_reset_applied = 0.0f;
+  float n_taa_depsgraph_trigger = 0.0f;
+  float n_taa_depsgraph_reset_applied = 0.0f;
   float bge_viewport_sample = 0.0f;
   float bge_interactive_mode = 0.0f;
 
@@ -565,6 +569,19 @@ struct DRWGameProfileStats {
 };
 
 DRWGameProfileStats &DRW_game_profile_get();
+
+/* UPBGE Fase 0 (PLANO_PERFORMANCE_GPU_ESCALABILIDADE §3.1): camera propagation chain trace.
+ * Enabled with env var BGE_CAM_TRACE=<file.jsonl>. Writes one JSON line per stage per frame,
+ * all sharing the same "f" frame id, so the chain KX SceneGraph -> ob_orig -> ob_eval ->
+ * rv3d->viewmat -> EEVEE VelocityModule can be validated stage by stage.
+ * No-op when the env var is unset (single bool check per call).
+ * `m16` is a 16-float column-major matrix (or nullptr for event-only stages). */
+void DRW_bge_cam_trace_begin_frame(bool use_viewport_render);
+void DRW_bge_cam_trace_stage(const char *stage,
+                             const char *camera_name,
+                             const float *m16,
+                             bool dirty_or_flag,
+                             const char *extra_json);
 
 /* RAII scoped timer: accumulates seconds into `dest` on scope exit.
  * When `enabled` is false, timings are written to a throwaway slot (near-zero cost). */

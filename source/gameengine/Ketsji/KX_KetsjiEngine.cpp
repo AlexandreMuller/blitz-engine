@@ -316,6 +316,9 @@ void KX_KetsjiEngine::SwapBuffersNow()
 
 void KX_KetsjiEngine::BeginFrame()
 {
+  /* UPBGE Fase 0 (GPU plan §3.1): frame boundary for the camera chain trace. */
+  DRW_bge_cam_trace_begin_frame(UseViewportRender());
+
   /* UPBGE Fase 4: with render-ahead, the previous frame's SwapBuffers is done here, before any
    * new drawing. This overlaps the CPU of the current frame with the GPU of the previous one. */
   SwapBuffersNow();
