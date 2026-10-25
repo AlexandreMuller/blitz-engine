@@ -181,13 +181,15 @@ void Instance::init(const int2 &output_res,
 
     /* Note: Do not update the value here as we use it during sync for checking ID updates. */
     if (depsgraph_last_update_ != DEG_get_update_count(depsgraph)) {
-      DRW_game_profile_get().n_taa_reset_depsgraph += 1.0f;
+      DRWGameProfileStats &game_profile = DRW_game_profile_get();
+      game_profile.n_taa_depsgraph_trigger += 1.0f;
       /* UPBGE Fase B1: in the game render loop the depsgraph updates every frame (animated
        * objects, logic-driven transforms); the blunt reset destroys temporal accumulation.
        * Granular recalc-flag resets (materials/lights/world) still cover structural changes.
        * depsgraph_last_update_ is still refreshed at the end of sync, so those keep working. */
       if (!DRW_game_render_loop_is_active() || DRW_bge_taa_legacy_reset()) {
         sampling.reset();
+        game_profile.n_taa_depsgraph_reset_applied += 1.0f;
       }
     }
     if (assign_if_different(is_viewport_compositor_used, draw_ctx->is_viewport_compositor_used()))
@@ -420,13 +422,25 @@ void Instance::begin_sync()
     use_surfaces = use_curves = use_volumes = true;
   }
 
-  if (is_viewport() && velocity.camera_has_motion()) {
-    DRW_game_profile_get().n_taa_reset_camera += 1.0f;
-    /* UPBGE Fase B1: velocity reprojection (film + raytrace history) already covers camera
-     * motion; resetting accumulation every moving frame kills temporal convergence in game.
-     * In the DCC viewport the upstream behavior is preserved. */
-    if (!DRW_game_render_loop_is_active() || DRW_bge_taa_legacy_reset()) {
-      sampling.reset();
+  if (is_viewport()) {
+    const bool camera_motion = velocity.camera_has_motion();
+    /* UPBGE Fase 0 (GPU plan §3.1): trace the camera data the VelocityModule actually sees,
+     * closing the chain KX -> ob_orig -> ob_eval -> rv3d -> velocity for the same frame id. */
+    DRW_bge_cam_trace_stage("velocity",
+                            camera_orig_object ? camera_orig_object->id.name + 2 : nullptr,
+                            &velocity.camera_steps[STEP_CURRENT]->viewinv[0][0],
+                            camera_motion,
+                            nullptr);
+    if (camera_motion) {
+      DRWGameProfileStats &game_profile = DRW_game_profile_get();
+      game_profile.n_taa_cam_motion_trigger += 1.0f;
+      /* UPBGE Fase B1: velocity reprojection (film + raytrace history) already covers camera
+       * motion; resetting accumulation every moving frame kills temporal convergence in game.
+       * In the DCC viewport the upstream behavior is preserved. */
+      if (!DRW_game_render_loop_is_active() || DRW_bge_taa_legacy_reset()) {
+        sampling.reset();
+        game_profile.n_taa_cam_reset_applied += 1.0f;
+      }
     }
   }
 }

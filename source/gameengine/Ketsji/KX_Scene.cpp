@@ -922,6 +922,25 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
 
   PrepareGPUViewport(cam);
 
+  /* UPBGE Fase 0 (GPU plan §3.1): camera chain trace, stage 1 — the KX SceneGraph
+   * transform of the render camera and its DIRTY_RENDER state at render start. */
+  if (cam) {
+    float sg_m16[16];
+    cam->NodeGetWorldTransform().getValue(sg_m16);
+    char extra[96];
+    snprintf(extra,
+             sizeof(extra),
+             "\"overlay\":%d,\"last_pass\":%d,\"vp_render\":%d",
+             is_overlay_pass ? 1 : 0,
+             is_last_render_pass ? 1 : 0,
+             engine->UseViewportRender() ? 1 : 0);
+    DRW_bge_cam_trace_stage("kx_sg",
+                            cam->GetName().c_str(),
+                            sg_m16,
+                            cam->GetSGNode()->IsDirty(SG_Node::DIRTY_RENDER),
+                            extra);
+  }
+
   DRWGameProfileStats &profile = DRW_game_profile_get();
   const bool profile_enabled = profile.enabled;
   if (profile_enabled) {
@@ -997,6 +1016,13 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
     }
   }
 
+  /* UPBGE Fase 0 (GPU plan §3.1): camera chain trace, stage 2 — the original blender
+   * object transform after TagForTransformUpdate() copied the SceneGraph state. */
+  if (cam && cam->GetBlenderObject()) {
+    blender::float4x4 m = cam->GetBlenderObject()->object_to_world();
+    DRW_bge_cam_trace_stage("ob_orig", cam->GetName().c_str(), &m[0][0], false, nullptr);
+  }
+
   // Only evaluate the depsgraph when something structural changed.
   // The first frame always evaluates the depsgraph to ensure a valid evaluated state.
   // Particle systems driven by game_simulation_steps force the depsgraph dirty above.
@@ -1025,6 +1051,16 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
   else {
     for (KX_GameObject *gameobj : GetObjectList()) {
       gameobj->TagForTransformUpdateEvaluated(is_last_render_pass);
+    }
+  }
+
+  /* UPBGE Fase 0 (GPU plan §3.1): camera chain trace, stage 3 — the evaluated object
+   * transform after TagForTransformUpdateEvaluated() copied the SceneGraph state. */
+  if (cam && cam->GetBlenderObject()) {
+    blender::Object *ob_eval = blender::DEG_get_evaluated(depsgraph, cam->GetBlenderObject());
+    if (ob_eval) {
+      blender::float4x4 m = ob_eval->object_to_world();
+      DRW_bge_cam_trace_stage("ob_eval", cam->GetName().c_str(), &m[0][0], false, nullptr);
     }
   }
 
@@ -1082,6 +1118,11 @@ void KX_Scene::RenderAfterCameraSetup(KX_Camera *cam,
     RegionView3D *rv3d = (RegionView3D *)region->regiondata;
     GPU_matrix_projection_set(rv3d->winmat);
     GPU_matrix_set(rv3d->viewmat);
+
+    /* UPBGE Fase 0 (GPU plan §3.1): camera chain trace, stage 4 — the view matrices that
+     * ED_view3d_update_viewmat() derived from the evaluated camera (rv3d->viewinv is the
+     * camera world matrix, matching the semantic of the other stages). */
+    DRW_bge_cam_trace_stage("rv3d", cam->GetName().c_str(), &rv3d->viewinv[0][0], false, nullptr);
 
     UpdateObjectLods(cam);
   }
