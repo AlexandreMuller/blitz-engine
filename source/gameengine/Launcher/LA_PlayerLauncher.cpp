@@ -35,12 +35,13 @@
 #endif
 
 #include "LA_PlayerLauncher.h"
-
+#include "BKE_context.hh"
 #include "BKE_sound.hh"
 #include "BLI_fileops.hh"
-
 #include "CM_Message.h"
 #include "DEV_InputDevice.h"
+#include "DNA_scene_types.h"
+#include "DNA_view3d_types.h"
 #include "GPG_Canvas.h"
 #include "KX_PythonInit.h"
 
@@ -120,6 +121,19 @@ bool LA_PlayerLauncher::GetUseAlwaysExpandFraming()
 
 void LA_PlayerLauncher::InitCamera()
 {
+  /* UPBGE Fase 0 (GPU plan §3.1): the scene camera is only picked up during conversion
+   * when the region view is in camera mode (RV3D_CAMOB, BL_DataConversion.cpp). In the
+   * player the region's persp comes from the .blend's saved layout, so the rendered
+   * camera depended on viewport authoring state instead of the scene's active camera
+   * (falling back to a static __default__cam__). Force camera mode here: the player
+   * must always render from scene->camera. Embedded keeps its viewport override
+   * behavior (LA_BlenderLauncher::InitCamera). */
+  if (m_startScene->camera) {
+    blender::RegionView3D *rv3d = CTX_wm_region_view3d(m_context);
+    if (rv3d) {
+      rv3d->persp = RV3D_CAMOB;
+    }
+  }
 }
 
 void LA_PlayerLauncher::InitPython()
