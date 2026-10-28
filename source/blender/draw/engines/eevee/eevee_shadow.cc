@@ -42,6 +42,19 @@ static bool bge_shadow_clipmap_halfrate()
  * never frozen: the initial clipmap distribution is always applied immediately. */
 static int g_bge_shadow_frame_parity = -1;
 
+/* UPBGE Fase 1 (GPU plan §4.2): BGE_SHADOW_STATS_LEGACY_READ=1 restores the synchronous
+ * per-frame shadow statistics read in the game render loop (A/B and rollback).
+ * Default keeps the new non-blocking delayed poll. */
+static bool bge_shadow_stats_legacy_read()
+{
+  static const bool legacy = []() {
+    const char *env = getenv("BGE_SHADOW_STATS_LEGACY_READ");
+    return env &&
+           (env[0] == '1' || env[0] == 't' || env[0] == 'T' || env[0] == 'y' || env[0] == 'Y');
+  }();
+  return legacy;
+}
+
 /* -------------------------------------------------------------------- */
 /** \name Tile map
  *
@@ -680,17 +693,36 @@ void ShadowModule::init()
     else {
       statistics_buf_.swap();
     }
-    statistics_buf_.current().read();
-    ShadowStatistics stats = statistics_buf_.current();
 
-    if (stats.page_used_count > shadow_page_len_ && enabled_) {
+    /* UPBGE Fase 1 (GPU plan §4.2): in the game render loop the synchronous read() waits
+     * on the Vulkan timeline every frame. Poll instead: consume the previous frame's
+     * async copy only when the device actually finished it, otherwise keep the last
+     * valid statistics and do not emit warnings from stale/zero data. The poll also
+     * submits the copy for the next frame, so the render loop skips its own
+     * async_flush_to_host() in this mode (no duplicate copy+flush per frame).
+     * F12/light bake and the DCC viewport keep the synchronous path. */
+    ShadowStatistics stats = {};
+    bool stats_valid = false;
+    if (DRW_game_render_loop_is_active() && !bge_shadow_stats_legacy_read()) {
+      stats_valid = statistics_buf_.current().read_if_ready();
+      if (stats_valid) {
+        stats = statistics_buf_.current();
+      }
+    }
+    else {
+      statistics_buf_.current().read();
+      stats = statistics_buf_.current();
+      stats_valid = true;
+    }
+
+    if (stats_valid && stats.page_used_count > shadow_page_len_ && enabled_) {
       inst_.info_append_i18n(
           "Error: Shadow buffer full, may result in missing shadows and lower "
           "performance. ({} / {})",
           stats.page_used_count,
           shadow_page_len_);
     }
-    if (stats.view_needed_count > SHADOW_VIEW_MAX && enabled_) {
+    if (stats_valid && stats.view_needed_count > SHADOW_VIEW_MAX && enabled_) {
       inst_.info_append_i18n("Error: Too many shadow updates, some shadows might be incorrect.");
     }
   }
@@ -1395,7 +1427,15 @@ void ShadowModule::render(View &view, int2 extent)
 
       shadow_multi_view_.compute_procedural_bounds();
 
-      statistics_buf_.current().async_flush_to_host();
+      /* UPBGE Fase 1 (GPU plan §4.2): in the game render loop the next frame's init()
+       * already submits the readback copy via read_if_ready(); flushing here too would
+       * duplicate the copy + render-graph flush every frame. Image render/bake and the
+       * DCC viewport keep the existing flush (their readback path consumes it). */
+      const bool stats_readback_via_poll = DRW_game_render_loop_is_active() &&
+                                           !bge_shadow_stats_legacy_read();
+      if (!stats_readback_via_poll) {
+        statistics_buf_.current().async_flush_to_host();
+      }
 
       /* Flush every loop as these passes are very heavy. */
       bool use_flush = loop_count != 0;
