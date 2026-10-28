@@ -4,6 +4,58 @@
 > Artefatos locais (JSONL brutos, traces, perfis, screenshots, fingerprints) ficam em
 > `areatest_tmp/perf_gpu/out/`.
 
+## Entrega 2 — Fase 1: Readbacks Vulkan não-bloqueantes + estatísticas de sombra (2026-10-27)
+
+**Escopo executado:** §4.1 (`read_if_ready()` Vulkan) e §4.2 (readback síncrono de
+estatísticas de sombra no jogo).
+
+**Configuração:** commit `85a4dfe5a88` + diff local `29ec854c3aba` (5 arquivos, +209/-68);
+mesmo hardware/build da entrega 1; runs em `out/e2_new` (default) e `out/e2_legacy`
+(`BGE_SHADOW_STATS_LEGACY_READ=1`).
+
+### Mudanças
+
+| Arquivo | Mudança |
+|---|---|
+| `vk_storage_buffer.cc`, `vk_vertex_buffer.cc` | `read_if_ready()` não chama mais `wait_for_timeline()`: consome apenas quando `submission_finished_timeline_get()` cobre a timeline pendente; sem resultado pronto retorna `false` **sem wait, sem flush e sem nova cópia** sobre o staging/mapped buffer em uso; `read_if_ready_timeline_`/`in_use_` só são limpos após consumo válido; invalidation de memória mapeada preservada |
+| `DRW_gpu_wrapper.hh` | novo `StorageCommon::read_if_ready()` no wrapper DRW (usa `GPU_storagebuf_read_if_ready` já existente) |
+| `eevee_shadow.cc` | no game render loop, `ShadowModule::init()` troca o `read()` síncrono por poll atrasado; warnings só com estatística válida (sem warning de dado obsoleto); o `async_flush_to_host()` do render loop é pulado nesse modo (o próprio poll submete a cópia do próximo frame — sem cópia+flush duplicados). `BGE_SHADOW_STATS_LEGACY_READ=1` restaura o comportamento antigo; F12/light bake e viewport DCC inalterados |
+| `storage_buffer_test.cc` | novo teste `storage_buffer_read_if_ready`: polls sucessivos com a fila ocupada, dados corretos, ciclo repetido sem crash, caminho síncrono funcional após polling (compila quando `WITH_GTESTS=ON`; a suíte está OFF neste build) |
+
+### Verificação do aceite
+
+- **Zero wait no caminho non-blocking:** `read_if_ready()` não contém mais nenhuma chamada a
+  `wait_for_timeline()` (verificado estaticamente; o wait permanece apenas em `read_async`,
+  fence e work-in-flight — caminhos explicitamente bloqueantes).
+- **Imagem semanticamente neutra:** shot `translate_r0_f0420` legacy×novo: 99,95% dos pixels
+  idênticos (0,045% > 0,05; TAA jitter), zero NaN.
+- **Vulkan validation:** run de 150 frames com `-d gpu` — zero erros de validation, race ou
+  assert (apenas warnings pré-existentes de meshes vazios da cena).
+- **Warnings de sombra:** emitidos somente após o primeiro consumo válido do poll; cadência
+  preservada pela swap-chain de 5 buffers (dados com a mesma idade de antes).
+
+### A/B de frametime (City Street, 1280×720, 600 frames × 3 reps, mediana, ms)
+
+| Trajeto | legacy p50/p95/p99 | novo p50/p95/p99 | Δ p50 |
+|---|---|---|---:|
+| still | 8,65 / 10,38 / 13,85 | 8,65 / 10,24 / 14,21 | -0,0% |
+| translate | 7,83 / 14,51 / 15,28 | 7,57 / 14,76 / 15,46 | -3,4% |
+| teleport | 8,56 / 13,81 / 14,97 | 8,32 / 10,58 / 15,71 | -2,7% |
+
+O ganho de p50 é pequeno e dentro da variância inter-rep (~5% medida na entrega 1). O p95 do
+trajeto teleport melhora ~23% (13,81 → 10,58 ms), coerente com a remoção de um wait de
+timeline por frame, mas 3 repetições não bastam para declará-lo. Conforme o aceite do plano
+(§4.2): "se o ganho for pequeno, a correção de contrato ainda permanece válida, mas sem
+promessa de speedup".
+
+### Decisão
+
+**Adotar** como correção de contrato (o caminho documentado como non-blocking agora é de
+fato non-blocking e não agenda cópias concorrentes), **sem** contabilizar speedup rumo às
+metas de 30%. O fallback `BGE_SHADOW_STATS_LEGACY_READ=1` permanece disponível para A/B.
+Próximo passo: entrega 3 (timestamps GPU Vulkan assíncronos e contadores de trabalho, §5),
+que dará a decomposição por passe necessária para priorizar a Fase 3.
+
 ## Entrega 1 — Fase 0: Harness confiável e baseline interativa (2026-10-25)
 
 **Escopo executado:** §3.1 (instrumentação da cadeia de câmera + contadores TAA separados),
