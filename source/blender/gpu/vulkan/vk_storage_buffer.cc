@@ -194,25 +194,35 @@ bool VKStorageBuffer::read_if_ready(void *data)
   void *mapped = mapped_ptr_get();
   if (mapped != nullptr) {
     bool has_result = false;
+    bool ready = false;
     if (read_if_ready_timeline_ != 0) {
       VKDevice &device = VKBackend::get().device;
-      device.wait_for_timeline(read_if_ready_timeline_);
-      read_if_ready_timeline_ = 0;
+      /* Non-blocking contract: only consume when the device has actually finished the
+       * previous submission. Never wait here. */
+      ready = device.submission_finished_timeline_get() >= read_if_ready_timeline_;
+      if (ready) {
+        read_if_ready_timeline_ = 0;
 
-      /* Make device writes visible to the host. */
-      buffer_.invalidate_mapped_range(0, size_in_bytes_);
-      memcpy(data, mapped, size_in_bytes_);
-      /* Consumed the mapped data produced by the previous async submission. */
-      read_if_ready_in_use_.store(false, std::memory_order_release);
-      has_result = true;
+        /* Make device writes visible to the host. */
+        buffer_.invalidate_mapped_range(0, size_in_bytes_);
+        memcpy(data, mapped, size_in_bytes_);
+        /* Consumed the mapped data produced by the previous async submission. */
+        read_if_ready_in_use_.store(false, std::memory_order_release);
+        has_result = true;
+      }
     }
 
-    /* Ensure rendering is flushed so the next frame's data will be available. */
-    context.rendering_end();
-    read_if_ready_timeline_ = context.flush_render_graph(RenderGraphFlushFlags::SUBMIT |
-                                                     RenderGraphFlushFlags::RENEW_RENDER_GRAPH);
-    /* Mark that the mapped buffer will be the target of the new async submission. */
-    read_if_ready_in_use_.store(true, std::memory_order_release);
+    /* Only submit new work when the previous one was consumed (or none pending).
+     * Otherwise the pending submission still owns the mapped buffer and a second
+     * copy would race with it. */
+    if (ready || read_if_ready_timeline_ == 0) {
+      /* Ensure rendering is flushed so the next frame's data will be available. */
+      context.rendering_end();
+      read_if_ready_timeline_ = context.flush_render_graph(RenderGraphFlushFlags::SUBMIT |
+                                                       RenderGraphFlushFlags::RENEW_RENDER_GRAPH);
+      /* Mark that the mapped buffer will be the target of the new async submission. */
+      read_if_ready_in_use_.store(true, std::memory_order_release);
+    }
 
     return has_result;
   }
@@ -225,32 +235,39 @@ bool VKStorageBuffer::read_if_ready(void *data)
   }
 
   bool has_result = false;
+  bool ready = false;
 
-  /* Step 1: If a previous submission is pending, check if it has completed.
+  /* Step 1: If a previous submission is pending, check non-blockingly if it has completed.
    * After a full frame of rendering, the timeline should have advanced past our value. */
   if (read_if_ready_timeline_ != 0) {
     VKDevice &device = VKBackend::get().device;
     /* Non-blocking check: timeline should already be past this value after a full frame. */
-    device.wait_for_timeline(read_if_ready_timeline_);
-    read_if_ready_timeline_ = 0;
+    ready = device.submission_finished_timeline_get() >= read_if_ready_timeline_;
+    if (ready) {
+      read_if_ready_timeline_ = 0;
 
-    /* The staging buffer is mapped — just memcpy. */
-    BLI_assert(read_if_ready_buffer_->host_buffer_get().is_mapped());
-    memcpy(data, read_if_ready_buffer_->host_buffer_get().mapped_memory_get(), size_in_bytes_);
-    has_result = true;
-    /* Consumed the mapped data produced by the previous async submission. */
-    read_if_ready_in_use_.store(false, std::memory_order_release);
+      /* The staging buffer is mapped — just memcpy. */
+      BLI_assert(read_if_ready_buffer_->host_buffer_get().is_mapped());
+      memcpy(data, read_if_ready_buffer_->host_buffer_get().mapped_memory_get(), size_in_bytes_);
+      has_result = true;
+      /* Consumed the mapped data produced by the previous async submission. */
+      read_if_ready_in_use_.store(false, std::memory_order_release);
+    }
   }
 
-  /* Step 2: Submit a new async copy for the next call to pick up. */
-  read_if_ready_buffer_->copy_from_device(context);
+  /* Step 2: Submit a new async copy for the next call to pick up, but only once the
+   * previous submission was consumed — the staging buffer is owned by the pending copy
+   * until then, and a second copy would race with it. */
+  if (ready || read_if_ready_timeline_ == 0) {
+    read_if_ready_buffer_->copy_from_device(context);
 
-  /* Flush the render graph to actually submit the copy command, but do NOT wait. */
-  context.rendering_end();
-  read_if_ready_timeline_ = context.flush_render_graph(RenderGraphFlushFlags::SUBMIT |
-                                                   RenderGraphFlushFlags::RENEW_RENDER_GRAPH);
-  /* Mark that the staging buffer's mapped memory will be targeted by the async submission. */
-  read_if_ready_in_use_.store(true, std::memory_order_release);
+    /* Flush the render graph to actually submit the copy command, but do NOT wait. */
+    context.rendering_end();
+    read_if_ready_timeline_ = context.flush_render_graph(RenderGraphFlushFlags::SUBMIT |
+                                                     RenderGraphFlushFlags::RENEW_RENDER_GRAPH);
+    /* Mark that the staging buffer's mapped memory will be targeted by the async submission. */
+    read_if_ready_in_use_.store(true, std::memory_order_release);
+  }
 
   return has_result;
 }

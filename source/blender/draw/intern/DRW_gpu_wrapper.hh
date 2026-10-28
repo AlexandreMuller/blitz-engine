@@ -255,6 +255,14 @@ class StorageCommon : public DataBuffer<T, len, false>, NonMovable, NonCopyable 
     GPU_storagebuf_read(ssbo_, this->data_);
   }
 
+  /* Non-blocking 1-frame-delayed readback. Returns true when data was consumed
+   * (copy into this->data_); false when the previous submission is still in flight.
+   * See gpu::StorageBuf::read_if_ready(). */
+  bool read_if_ready()
+  {
+    return GPU_storagebuf_read_if_ready(ssbo_, this->data_);
+  }
+
   operator gpu::StorageBuf *() const
   {
     return ssbo_;
