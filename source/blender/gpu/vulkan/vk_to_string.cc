@@ -110,6 +110,11 @@ std::string to_string(VkDescriptorSet vk_handle)
 {
   return to_string_handle(uint64_t(vk_handle));
 }
+
+std::string to_string(VkQueryPool vk_handle)
+{
+  return to_string_handle(uint64_t(vk_handle));
+}
 #endif
 
 const char *to_string(const VkAttachmentLoadOp vk_attachment_load_op)

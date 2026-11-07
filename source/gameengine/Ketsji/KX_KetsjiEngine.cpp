@@ -323,6 +323,10 @@ void KX_KetsjiEngine::BeginFrame()
    * new drawing. This overlaps the CPU of the current frame with the GPU of the previous one. */
   SwapBuffersNow();
 
+  /* UPBGE GPU plan §5: after the previous frame was closed and submitted by SwapBuffersNow,
+   * poll its GPU timestamps (non-blocking) and start recording the new frame. */
+  DRW_game_gpu_profile_begin_frame();
+
   m_rasterizer->BeginFrame(m_frameTime);
 
   m_canvas->BeginDraw();
@@ -377,6 +381,10 @@ void KX_KetsjiEngine::EndFrame()
   }
 
   m_canvas->EndDraw();
+
+  /* UPBGE GPU plan §5: emit the per-frame "cpu_frame" record (wait buckets, work counters,
+   * DRW timers). */
+  DRW_game_gpu_profile_end_frame();
 }
 
 void KX_KetsjiEngine::EndFrameViewportRender()

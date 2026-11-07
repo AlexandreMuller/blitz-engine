@@ -15,6 +15,7 @@
 #include "GPU_batch.hh"
 #include "GPU_context.hh"
 #include "GPU_texture_pool.hh"
+#include "GPU_timestamp.hh"
 
 #include "gpu_debug_private.hh"
 #include "gpu_framebuffer_private.hh"
@@ -110,6 +111,36 @@ class Context {
 
   virtual void debug_group_begin(const char * /*name*/, int /*index*/) {};
   virtual void debug_group_end() {};
+
+  /* Asynchronous GPU timestamp telemetry (UPBGE GPU plan §5). No-op defaults so backends
+   * without support don't need to implement them. See GPU_timestamp.hh. */
+  virtual bool timestamp_is_supported()
+  {
+    return false;
+  }
+  virtual float timestamp_period_ns_get()
+  {
+    return 0.0f;
+  }
+  virtual bool timestamp_frame_begin(uint64_t /*frame_id*/)
+  {
+    return false;
+  }
+  virtual void timestamp_frame_close() {}
+  virtual void timestamp_scope_begin(const char * /*name*/) {}
+  virtual void timestamp_scope_end() {}
+  virtual uint32_t timestamp_poll(GPUTimestampResultCallback /*callback*/, void * /*userdata*/)
+  {
+    return 0;
+  }
+  virtual uint64_t timestamp_dropped_frames_get()
+  {
+    return 0;
+  }
+  virtual uint64_t timestamp_invalid_scopes_get()
+  {
+    return 0;
+  }
 
   /* Returns true if capture successfully started. */
   virtual bool debug_capture_begin(const char *title) = 0;

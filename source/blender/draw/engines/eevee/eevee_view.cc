@@ -20,6 +20,7 @@
 #include "draw_common.hh"
 
 #include "GPU_debug.hh"
+#include "GPU_timestamp.hh"
 
 #include "eevee_instance.hh"
 
@@ -102,6 +103,7 @@ void ShadingView::render()
   GBuffer &gbuf = inst_.gbuffer;
   {
     DRWGameProfileTimer _profile_acquire(profile_game, profile.t_sv_setup);
+    GPUTimestampScope _gpu_scope("sv.setup"); // UPBGE GPU plan §5
     rbufs.acquire(extent_);
 
     combined_fb_.ensure(GPU_ATTACHMENT_TEXTURE(rbufs.depth_tx),
@@ -143,6 +145,7 @@ void ShadingView::render()
 
   {
     DRWGameProfileTimer _profile_lights(profile_game, profile.t_sv_lights);
+    GPUTimestampScope _gpu_scope("sv.lights"); // UPBGE GPU plan §5
     if (DRW_context_get()->is_background_drawing()) { //UPBGE: for overlay pass
       inst_.pipelines.background.clear(render_view_);
     }
@@ -155,11 +158,13 @@ void ShadingView::render()
 
   {
     DRWGameProfileTimer _profile_volpre(profile_game, profile.t_sv_volume_pre);
+    GPUTimestampScope _gpu_scope("sv.volume_pre"); // UPBGE GPU plan §5
     inst_.volume.draw_prepass(main_view_);
   }
 
   {
     DRWGameProfileTimer _profile_deferred(profile_game, profile.t_sv_deferred);
+    GPUTimestampScope _gpu_scope("sv.deferred"); // UPBGE GPU plan §5
     inst_.pipelines.deferred.render(main_view_,
                                     render_view_,
                                     prepass_fb_,
@@ -178,17 +183,20 @@ void ShadingView::render()
 
   {
     DRWGameProfileTimer _profile_volume(profile_game, profile.t_sv_volume);
+    GPUTimestampScope _gpu_scope("sv.volume"); // UPBGE GPU plan §5
     inst_.volume.draw_compute(main_view_, extent_);
     inst_.volume.draw_resolve(main_view_);
   }
 
   {
     DRWGameProfileTimer _profile_ao(profile_game, profile.t_sv_ao);
+    GPUTimestampScope _gpu_scope("sv.ao"); // UPBGE GPU plan §5
     inst_.ambient_occlusion.render_pass(render_view_);
   }
 
   {
     DRWGameProfileTimer _profile_forward(profile_game, profile.t_sv_forward);
+    GPUTimestampScope _gpu_scope("sv.forward"); // UPBGE GPU plan §5
     inst_.pipelines.forward.render(
         render_view_, rbufs.depth_tx, prepass_fb_, transparent_fb_, combined_fb_, extent_);
     inst_.lights.shape_display_draw(render_view_, combined_fb_);
@@ -202,6 +210,7 @@ void ShadingView::render()
 
   {
     DRWGameProfileTimer _profile_postfx(profile_game, profile.t_sv_postfx_film);
+    GPUTimestampScope _gpu_scope("sv.postfx_film"); // UPBGE GPU plan §5
     gpu::Texture *combined_final_tx = render_postfx(rbufs.combined_tx);
     inst_.film.accumulate(jitter_view_, combined_final_tx);
   }

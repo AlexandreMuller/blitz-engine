@@ -9,6 +9,8 @@
 #include "vk_render_graph.hh"
 #include "gpu_backend.hh"
 
+#include "GPU_timestamp.hh"
+
 #include <sstream>
 
 namespace blender::gpu::render_graph {
@@ -36,6 +38,67 @@ void VKRenderGraph::reset()
   debug_.used_groups.clear();
   debug_.group_stack.clear();
   debug_.groups.clear();
+}
+
+void VKRenderGraph::stats_add(Span<NodeHandle> node_handles) const
+{
+  if (!GPU_timestamp_is_enabled()) {
+    return;
+  }
+  uint64_t draws = 0;
+  uint64_t draws_indexed = 0;
+  uint64_t draws_indirect = 0;
+  uint64_t dispatches = 0;
+  uint64_t dispatches_indirect = 0;
+  uint64_t dispatch_groups = 0;
+  uint64_t vertices = 0;
+  uint64_t instances = 0;
+  for (const NodeHandle node_handle : node_handles) {
+    const VKRenderGraphNode &node = nodes_[node_handle];
+    switch (node.type) {
+      case VKNodeType::DRAW: {
+        const VKDrawNode::Data &data = storage_.draw[node.storage_index];
+        draws++;
+        vertices += data.vertex_count;
+        instances += data.instance_count;
+        break;
+      }
+      case VKNodeType::DRAW_INDEXED: {
+        const VKDrawIndexedNode::Data &data = storage_.draw_indexed[node.storage_index];
+        draws_indexed++;
+        vertices += data.index_count;
+        instances += data.instance_count;
+        break;
+      }
+      case VKNodeType::DRAW_INDIRECT:
+      case VKNodeType::DRAW_INDEXED_INDIRECT:
+        /* Draw counts are read back from GPU buffers; only count the nodes here. */
+        draws_indirect++;
+        break;
+      case VKNodeType::DISPATCH: {
+        const VKDispatchNode::Data &data = node.dispatch;
+        dispatches++;
+        dispatch_groups += uint64_t(data.group_count_x) * data.group_count_y *
+                           data.group_count_z;
+        break;
+      }
+      case VKNodeType::DISPATCH_INDIRECT:
+        /* Group counts are read back from GPU buffers; only count the nodes here. */
+        dispatches_indirect++;
+        break;
+      default:
+        break;
+    }
+  }
+  GPU_perf_counter_add(GPU_PERF_COUNTER_DRAW, draws);
+  GPU_perf_counter_add(GPU_PERF_COUNTER_DRAW_INDEXED, draws_indexed);
+  GPU_perf_counter_add(GPU_PERF_COUNTER_DRAW_INDIRECT, draws_indirect);
+  GPU_perf_counter_add(GPU_PERF_COUNTER_DISPATCH, dispatches);
+  GPU_perf_counter_add(GPU_PERF_COUNTER_DISPATCH_INDIRECT, dispatches_indirect);
+  GPU_perf_counter_add(GPU_PERF_COUNTER_DISPATCH_GROUPS, dispatch_groups);
+  GPU_perf_counter_add(GPU_PERF_COUNTER_VERTICES, vertices);
+  GPU_perf_counter_add(GPU_PERF_COUNTER_INSTANCES, instances);
+  GPU_perf_counter_add(GPU_PERF_COUNTER_NODES_SUBMITTED, node_handles.size());
 }
 
 void VKRenderGraph::memstats() const

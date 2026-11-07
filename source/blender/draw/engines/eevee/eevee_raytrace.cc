@@ -8,10 +8,13 @@
  * The ray-tracing module class handles ray generation, scheduling, tracing and denoising.
  */
 
+#include "BLI_string_utils.hh"
 #include "GPU_debug.hh"
+#include "GPU_timestamp.hh"
+
+#include "DRW_render.hh" /* UPBGE GPU plan §5: game work counters (BGE_GPU_PROFILE). */
 
 #include "eevee_instance.hh"
-
 #include "eevee_raytrace.hh"
 
 namespace blender::eevee {
@@ -565,7 +568,15 @@ RayTraceResult RayTraceModule::render(RayTraceBuffer &rt_buffer,
 
   const bool has_active_closure = active_closures != CLOSURE_NONE;
 
+  /* UPBGE GPU plan §5.5: work counters for the BGE_GPU_PROFILE telemetry. */
+  {
+    DRWGameWorkCounters &wc = DRW_game_work_counters_get();
+    wc.rt_closure_bins_active = has_active_closure ? min_ii(3, count_bits_i(active_closures)) : 0;
+    wc.rt_fast_gi_active = has_active_closure && use_fast_gi_scan;
+  }
+
   if (has_active_closure) {
+    GPUTimestampScope _gpu_scope("rt.classify"); // UPBGE GPU plan §5
     inst_.manager->submit(tile_classify_ps_);
   }
 
@@ -608,12 +619,27 @@ RayTraceResult RayTraceModule::render(RayTraceBuffer &rt_buffer,
 
       fast_gi_tracing_dispatch_buf_.clear_to_zero();
       fast_gi_denoise_dispatch_buf_.clear_to_zero();
-      inst_.manager->submit(fast_gi_schedule_ps_);
-
-      inst_.manager->submit(fast_gi_setup_ps_, render_view);
-      inst_.manager->submit(fast_gi_scan_ps_, render_view);
-      inst_.manager->submit(fast_gi_denoise_ps_, render_view);
-      inst_.manager->submit(fast_gi_resolve_ps_, render_view);
+      /* UPBGE GPU plan §5: one GPU timestamp scope per FastGI stage. */
+      {
+        GPUTimestampScope _gpu_scope("fastgi.schedule");
+        inst_.manager->submit(fast_gi_schedule_ps_);
+      }
+      {
+        GPUTimestampScope _gpu_scope("fastgi.setup");
+        inst_.manager->submit(fast_gi_setup_ps_, render_view);
+      }
+      {
+        GPUTimestampScope _gpu_scope("fastgi.scan");
+        inst_.manager->submit(fast_gi_scan_ps_, render_view);
+      }
+      {
+        GPUTimestampScope _gpu_scope("fastgi.denoise");
+        inst_.manager->submit(fast_gi_denoise_ps_, render_view);
+      }
+      {
+        GPUTimestampScope _gpu_scope("fastgi.resolve");
+        inst_.manager->submit(fast_gi_resolve_ps_, render_view);
+      }
 
       for (int i : IndexRange(4)) {
         fast_gi_radiance_tx_[i].release();
@@ -685,10 +711,18 @@ RayTraceResultTexture RayTraceModule::trace(int closure_index,
   data_.closure_index = closure_index;
   inst_.uniform_data.raytrace.push_update();
 
+  /* UPBGE GPU plan §5: per-bin GPU timestamp scopes (name buffer is interned by the
+   * timestamp ring, so a stack buffer is fine). */
+  char gpu_scope_name[32];
+
   /* Ray setup. */
-  raytrace_tracing_dispatch_buf_.clear_to_zero();
-  raytrace_denoise_dispatch_buf_.clear_to_zero();
-  inst_.manager->submit(tile_compact_ps_);
+  {
+    SNPRINTF(gpu_scope_name, "rt%d.compact", closure_index);
+    GPUTimestampScope _gpu_scope(gpu_scope_name);
+    raytrace_tracing_dispatch_buf_.clear_to_zero();
+    raytrace_denoise_dispatch_buf_.clear_to_zero();
+    inst_.manager->submit(tile_compact_ps_);
+  }
 
   {
     /* Tracing rays. */
@@ -696,15 +730,23 @@ RayTraceResultTexture RayTraceModule::trace(int closure_index,
     ray_time_tx_.acquire_2d(tracing_res, gpu::TextureFormat::RAYTRACE_RAYTIME_FORMAT);
     ray_radiance_tx_.acquire_2d(tracing_res, gpu::TextureFormat::RAYTRACE_RADIANCE_FORMAT);
 
-    inst_.manager->submit(generate_ps_, render_view);
-    if (tracing_method_ == RAYTRACE_EEVEE_METHOD_SCREEN) {
-      if (inst_.planar_probes.enabled()) {
-        inst_.manager->submit(trace_planar_ps_, render_view);
-      }
-      inst_.manager->submit(trace_screen_ps_, render_view);
+    {
+      SNPRINTF(gpu_scope_name, "rt%d.generate", closure_index);
+      GPUTimestampScope _gpu_scope(gpu_scope_name);
+      inst_.manager->submit(generate_ps_, render_view);
     }
-    else {
-      inst_.manager->submit(trace_fallback_ps_, render_view);
+    {
+      SNPRINTF(gpu_scope_name, "rt%d.trace", closure_index);
+      GPUTimestampScope _gpu_scope(gpu_scope_name);
+      if (tracing_method_ == RAYTRACE_EEVEE_METHOD_SCREEN) {
+        if (inst_.planar_probes.enabled()) {
+          inst_.manager->submit(trace_planar_ps_, render_view);
+        }
+        inst_.manager->submit(trace_screen_ps_, render_view);
+      }
+      else {
+        inst_.manager->submit(trace_fallback_ps_, render_view);
+      }
     }
   }
 
@@ -712,6 +754,8 @@ RayTraceResultTexture RayTraceModule::trace(int closure_index,
 
   /* Spatial denoise pass is required to resolve at least one ray per pixel. */
   {
+    SNPRINTF(gpu_scope_name, "rt%d.denoise_spatial", closure_index);
+    GPUTimestampScope _gpu_scope(gpu_scope_name);
     denoise_buf->denoised_spatial_tx.acquire_2d(extent,
                                                 gpu::TextureFormat::RAYTRACE_RADIANCE_FORMAT);
     hit_variance_tx_.acquire_2d(use_temporal_denoise ? extent : int2(1),
@@ -730,6 +774,8 @@ RayTraceResultTexture RayTraceModule::trace(int closure_index,
   ray_radiance_tx_.release();
 
   if (use_temporal_denoise) {
+    SNPRINTF(gpu_scope_name, "rt%d.denoise_temporal", closure_index);
+    GPUTimestampScope _gpu_scope(gpu_scope_name);
     denoise_buf->denoised_temporal_tx.acquire_2d(
         extent, gpu::TextureFormat::RAYTRACE_RADIANCE_FORMAT, usage_rw);
 
@@ -778,6 +824,8 @@ RayTraceResultTexture RayTraceModule::trace(int closure_index,
   hit_depth_tx_.release();
 
   if (use_bilateral_denoise) {
+    SNPRINTF(gpu_scope_name, "rt%d.denoise_bilateral", closure_index);
+    GPUTimestampScope _gpu_scope(gpu_scope_name);
     denoise_buf->denoised_bilateral_tx.acquire_2d(
         extent, gpu::TextureFormat::RAYTRACE_RADIANCE_FORMAT, usage_rw);
     denoised_bilateral_tx_ = denoise_buf->denoised_bilateral_tx;

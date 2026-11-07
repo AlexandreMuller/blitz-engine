@@ -24,6 +24,7 @@ std::string to_string(VkPipeline vk_handle);
 std::string to_string(VkPipelineLayout vk_handle);
 std::string to_string(VkRenderPass vk_handle);
 std::string to_string(VkFramebuffer vk_handle);
+std::string to_string(VkQueryPool vk_handle);
 #endif
 
 const char *to_string(VkAttachmentLoadOp vk_attachment_load_op);

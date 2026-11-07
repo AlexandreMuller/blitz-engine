@@ -21,6 +21,7 @@
 #include "vk_descriptor_pools.hh"
 #include "vk_resource_pool.hh"
 #include "vk_streaming_buffer.hh"
+#include "vk_timestamp.hh"
 
 namespace blender::gpu {
 class VKFrameBuffer;
@@ -56,6 +57,9 @@ class VKContext : public Context, NonCopyable {
   std::optional<std::reference_wrapper<VKThreadData>> thread_data_;
   std::optional<std::reference_wrapper<render_graph::VKRenderGraph>> render_graph_;
 
+  /** Asynchronous GPU timestamp telemetry (UPBGE GPU plan §5). */
+  VKGpuTimestampRing timestamp_ring_;
+
   /* Active shader specialization constants state. */
   shader::SpecializationConstants constants_state_;
 
@@ -85,6 +89,11 @@ class VKContext : public Context, NonCopyable {
   render_graph::VKRenderGraph &render_graph()
   {
     return render_graph_.value().get();
+  }
+  /** The render graph can be absent after #deactivate until the next #activate/flush. */
+  bool has_render_graph() const
+  {
+    return render_graph_.has_value();
   }
 
   VKContext(GHOST_IWindow *ghost_window, GHOST_IContext *ghost_context);
@@ -117,6 +126,17 @@ class VKContext : public Context, NonCopyable {
 
   void debug_unbind_all_ubo() override;
   void debug_unbind_all_ssbo() override;
+
+  /* Asynchronous GPU timestamp telemetry (UPBGE GPU plan §5). */
+  bool timestamp_is_supported() override;
+  float timestamp_period_ns_get() override;
+  bool timestamp_frame_begin(uint64_t frame_id) override;
+  void timestamp_frame_close() override;
+  void timestamp_scope_begin(const char *name) override;
+  void timestamp_scope_end() override;
+  uint32_t timestamp_poll(GPUTimestampResultCallback callback, void *userdata) override;
+  uint64_t timestamp_dropped_frames_get() override;
+  uint64_t timestamp_invalid_scopes_get() override;
 
   bool has_active_framebuffer() const;
   void activate_framebuffer(VKFrameBuffer &framebuffer);

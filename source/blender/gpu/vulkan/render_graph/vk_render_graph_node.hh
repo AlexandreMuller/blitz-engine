@@ -32,6 +32,7 @@
 #include "nodes/vk_synchronization_node.hh"
 #include "nodes/vk_update_buffer_node.hh"
 #include "nodes/vk_update_mipmaps_node.hh"
+#include "nodes/vk_write_timestamp_node.hh"
 
 namespace blender::gpu::render_graph {
 
@@ -149,6 +150,7 @@ struct VKRenderGraphNode {
     VKSynchronizationNode::Data synchronization;
     VKUpdateBufferNode::Data update_buffer;
     VKUpdateMipmapsNode::Data update_mipmaps;
+    VKWriteTimestampNode::Data write_timestamp;
     int64_t storage_index = -1;
   };
 
@@ -295,6 +297,8 @@ struct VKRenderGraphNode {
         return VKUpdateBufferNode::pipeline_stage;
       case VKNodeType::UPDATE_MIPMAPS:
         return VKUpdateMipmapsNode::pipeline_stage;
+      case VKNodeType::WRITE_TIMESTAMP:
+        return VKWriteTimestampNode::pipeline_stage;
     }
     BLI_assert_unreachable();
     return VK_PIPELINE_STAGE_NONE;
@@ -359,6 +363,7 @@ struct VKRenderGraphNode {
         BUILD_COMMANDS(VKNodeType::UPDATE_MIPMAPS, VKUpdateMipmapsNode, update_mipmaps)
         BUILD_COMMANDS(VKNodeType::DISPATCH, VKDispatchNode, dispatch)
         BUILD_COMMANDS(VKNodeType::DISPATCH_INDIRECT, VKDispatchIndirectNode, dispatch_indirect)
+        BUILD_COMMANDS(VKNodeType::WRITE_TIMESTAMP, VKWriteTimestampNode, write_timestamp)
         BUILD_COMMANDS_STORAGE(VKNodeType::DRAW, VKDrawNode, draw)
         BUILD_COMMANDS_STORAGE(VKNodeType::DRAW_INDEXED, VKDrawIndexedNode, draw_indexed)
         BUILD_COMMANDS_STORAGE(
@@ -411,6 +416,7 @@ struct VKRenderGraphNode {
       case VKNodeType::DRAW_INDEXED:
       case VKNodeType::DRAW_INDEXED_INDIRECT:
       case VKNodeType::DRAW_INDIRECT:
+      case VKNodeType::WRITE_TIMESTAMP:
         break;
     }
   }

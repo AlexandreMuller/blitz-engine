@@ -495,7 +495,10 @@ void DRW_game_python_loop_end(struct ViewLayer *view_layer);
  * and dumped as averages every `dump_interval` frames. All accumulation is a no-op
  * when disabled (single bool check). */
 struct DRWGameProfileStats {
+  /* True when timers should be collected: BGE_RENDER_PROFILE or BGE_GPU_PROFILE is set. */
   bool enabled = false;
+  /* True when the periodic text dump is active (BGE_RENDER_PROFILE only). */
+  bool dump_enabled = false;
   /* Optional log file. Set when BGE_RENDER_PROFILE is a file path instead of a boolean.
    * The game runtime may re-attach stdout to a console, so writing to our own file is
    * the only reliable capture. Null means stdout. */
@@ -582,6 +585,43 @@ void DRW_bge_cam_trace_stage(const char *stage,
                              const float *m16,
                              bool dirty_or_flag,
                              const char *extra_json);
+
+/* UPBGE GPU plan §5: asynchronous GPU timestamp telemetry + CPU wait buckets + GPU work
+ * counters. Enabled with env var BGE_GPU_PROFILE=<file.jsonl> (a boolean-like value writes
+ * to stdout). All entry points are near-zero-cost no-ops when disabled.
+ * Emitted JSONL record types:
+ *  - "header": exe/gpu/driver/timestamp_period_ns (config fingerprint).
+ *  - "cpu_frame": per-frame CPU wait buckets, DRW timers and work counters.
+ *  - "gpu_frame": per-frame GPU pass durations, keyed to the frame they were recorded for
+ *    (published a few frames later, never blocking).
+ * Frame ids are 1-based, same convention as BGE_CAM_TRACE (Python bench frames are 0-based). */
+bool DRW_game_gpu_profile_is_enabled();
+/* Called from KX_KetsjiEngine::BeginFrame, after the (render-ahead) swap of the previous
+ * frame: polls finished GPU frames, then starts the new frame's GPU timestamp recording. */
+void DRW_game_gpu_profile_begin_frame();
+/* Called from KX_KetsjiEngine::EndFrame: emits the "cpu_frame" record. */
+void DRW_game_gpu_profile_end_frame();
+
+/* GPU work counters filled by the draw engine / game engine (UPBGE GPU plan §5.5).
+ * Reset and emitted per frame by the BGE_GPU_PROFILE writer. */
+struct DRWGameWorkCounters {
+  /* eevee_shadow.cc (from the asynchronously polled ShadowStatistics). */
+  int shadow_page_used = 0;
+  int shadow_page_update = 0;
+  int shadow_page_allocated = 0;
+  int shadow_page_rendered = 0;
+  int shadow_view_needed = 0;
+  bool shadow_stats_valid = false;
+  /* eevee_raytrace.cc. */
+  int rt_closure_bins_active = 0;
+  bool rt_fast_gi_active = false;
+  /* KX_GameObject::UpdateLod. */
+  int lod_switches = 0;
+
+  void reset_frame();
+};
+
+DRWGameWorkCounters &DRW_game_work_counters_get();
 
 /* RAII scoped timer: accumulates seconds into `dest` on scope exit.
  * When `enabled` is false, timings are written to a throwaway slot (near-zero cost). */

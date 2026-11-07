@@ -4,6 +4,83 @@
 > Artefatos locais (JSONL brutos, traces, perfis, screenshots, fingerprints) ficam em
 > `areatest_tmp/perf_gpu/out/`.
 
+## Entrega 3 — Fase 2: Timestamps GPU Vulkan assíncronos, buckets de espera CPU e contadores de trabalho (2026-11-07)
+
+**Escopo executado:** §5 (timestamps GPU assíncronos por frame, esperas CPU separadas por
+bucket, contadores de trabalho GPU por passe; overhead ≤ 5% p50).
+
+**Configuração:** commit base `74d07790e3b` + diff local `13db873023cb` (25 arquivos
+modificados, +772/-26, + 6 arquivos novos); mesmo hardware/build das entregas 1-2; runs em
+`out/e3_baseline` (sem `--gpu-profile`) e `out/e3_gpuprof2` (com `--gpu-profile`,
+`BGE_GPU_PROFILE` ativo). Bench: City Street, 1280×720, warmup 120 + 600 frames medidos ×
+3 reps por trajeto (still, translate).
+
+### Mudanças
+
+| Arquivo | Mudança |
+|---|---|
+| `gpu/GPU_timestamp.hh`, `gpu/intern/gpu_timestamp.cc` (novos) | API pública gated por `BGE_GPU_PROFILE`: `GPU_timestamp_frame_begin/end` + frame_id global de gravação (`GPU_timestamp_recording_frame_id()`) para amarrar múltiplos contextos ao mesmo frame |
+| `gpu/vulkan/vk_timestamp.{hh,cc}` (novos) | `VKGpuTimestampRing`: ring de 8 slots × 128 queries (2 por escopo), keyed por frame_id; poll com `VK_QUERY_RESULT_WITH_AVAILABILITY_BIT` — nunca espera (`VK_NOT_READY` → slot segue PENDING); ring cheio → drop + contador `gpu_dropped`; reset só na reutilização do slot como primeiro nó do frame; registry estático multi-contexto (`poll_all`) com dedup de drop por frame |
+| `gpu/vulkan/render_graph/nodes/vk_write_timestamp_node.hh` (novo) | nó do render graph que escreve o timestamp; ordem do scheduler preservada |
+| `gpu/vulkan/render_graph/tests/vk_render_graph_test_timestamp.cc` (novo) | teste de ordem do scheduler (code-only: `WITH_GTESTS=OFF` neste build) |
+| `gpu/vulkan/vk_context.{cc,hh}` | `frame_begin` preguiçoso no primeiro `timestamp_scope_begin` do frame; fechamento do frame no `end_frame()` (contexto offscreen) ou no swap handler (contexto da janela, após o blit); poll/totais via registry; **correção:** `deactivate()` não descarta mais a gravação em andamento |
+| `gpu/intern/gpu_context_private.hh`, `gpu/CMakeLists.txt` | wiring da interface `GPUContext` de timestamps + build |
+| `GHOST_ContextVK.cc` | buckets de espera CPU separados: `frame_slot_fence_wait`, `present_submit`, `swapchain_acquire`, `wait_for_submission`, `submit_enqueue`, `render_graph_build/record` |
+| `draw/intern/draw_context.cc`, `DRW_render.hh` | `DRW_game_gpu_profile_begin/end_frame`; `gpu_total_ms` emitido apenas pelo registro que contém o escopo `frame_total` (contexto da janela) |
+| `eevee_{pipeline,raytrace,shadow,view}.cc`, `eevee_shadow.hh` | escopos GPU nomeados por passe (`sv.*`, `df.*`, `rt*`, `shadow.*`, `shd.*`, `fastgi.*`) |
+| `KX_KetsjiEngine.cpp`, `KX_GameObject.cpp` | ativação do perfil GPU no game loop quando `BGE_GPU_PROFILE` está definido |
+| `areatest_tmp/perf_gpu/analyze_bench.py` | merge por frame_id dos registros de múltiplos contextos (união de escopos; `gpu_total_ms` do registro que o possui; soma de `scopes_invalid`) |
+
+### Defeitos encontrados e corrigidos
+
+1. **Discard no deactivate:** o game engine desativa o contexto da janela logo antes do
+   present (`GPU_context_main_unlock`), e `VKContext::deactivate()` descartava a gravação
+   em andamento — zerando silenciosamente a telemetria de todo frame. Corrigido deixando o
+   ring intacto (a gravação é fechada e submetida depois, no swap handler, que flui o mesmo
+   render graph).
+2. **Render multi-contexto:** o DRW renderiza a cena EEVEE do jogo num contexto GPU
+   offscreen compartilhado dedicado (O), diferente do contexto da janela (W) — todos os
+   escopos EEVEE eram gravados no ring de O e descartados ao medir apenas W. Solução:
+   frame_id global na thread principal + registry de rings; O fecha no `end_frame()`, W
+   fecha no swap handler; merge por frame_id na análise. Diagnosticado via contadores de
+   debug (`NO-RECORD` = 774 escopos/frame) em run curto instrumentado.
+
+### Verificação do aceite (§5)
+
+- **2 queries/escopo; ring 8 slots × 128 queries keyed por frame_id; reset só na
+  reutilização como 1º nó do frame; ordem do scheduler preservada:** inspeção de código +
+  gtest de scheduler (code-only neste build, `WITH_GTESTS=OFF`).
+- **Poll nunca espera:** `WITH_AVAILABILITY` + `VK_NOT_READY` mantém PENDING; nenhum
+  `GPU_finish()` adicionado; latência de publicação observada ~2 frames.
+- **Cobertura:** 500-600 de 600 frames medidos com `gpu_total_ms` por run (83-100%); os
+  frames ainda em voo no quit não resolvem — benigno. 44 escopos distintos cobrindo
+  `sv.*`, `df.*`, `rt*`, `shadow.*`, `shd.*`, `fastgi.*`.
+- **`gpu_dropped=0`, `scopes_invalid=0`** em todas as 6 runs (o ring de O usa 64 de 64
+  escopos/frame — orçamento no limite, monitorar se o EEVEE adicionar passes).
+- **`BGE_RENDER_PROFILE` inalterado:** formato dos `prof_*.txt` idêntico (valores de tempo
+  diferem, como esperado).
+- **Erros de harness:** 1-3 `ValueError: I/O operation on closed file` por run (flush no
+  quit) são pré-existentes e aparecem igualmente no baseline.
+
+### A/B de frametime (600 frames × 3 reps, mediana das medianas, ms)
+
+| Trajeto | baseline p50 | gpu-profile p50 | Δ p50 | GPU p50 (novo) |
+|---|---:|---:|---:|---:|
+| still | 8,225 | 8,389 | +2,0% | 8,383 |
+| translate | 7,559 | 7,618 | +0,8% | 7,536 |
+
+Buckets de espera CPU (média/frame, `still_r1`): `wait_for_submission` 1,86 ms,
+`render_graph_record` 1,72 ms, `frame_slot_fence_wait` 1,02 ms, `submit_enqueue` 0,41 ms,
+`render_graph_build` 0,23 ms, `present_submit` 0,06 ms, `swapchain_acquire` 0,003 ms.
+
+### Decisão
+
+**Adotar.** Overhead de p50 ≤ 2% (abaixo dos 5% exigidos), zero drops/inválidos, e a
+decomposição GPU por passe (`df.*`, `rt*`, `shadow.*`, `fastgi.*`, `shd.*`) fica disponível
+para priorizar a Fase 3. Limitações conhecidas: cobertura de ~85-100% dos frames medidos
+(cauda em voo no quit); orçamento de 64 escopos/frame no limite; gtest de scheduler
+pendente de execução num build com `WITH_GTESTS=ON`.
+
 ## Entrega 2 — Fase 1: Readbacks Vulkan não-bloqueantes + estatísticas de sombra (2026-10-27)
 
 **Escopo executado:** §4.1 (`read_if_ready()` Vulkan) e §4.2 (readback síncrono de

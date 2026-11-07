@@ -11,6 +11,7 @@
  */
 
 #include "BLI_bounds.hh"
+#include "BLI_string_utils.hh"
 #include "GPU_capabilities.hh"
 
 #include "DNA_scene_types.h"
@@ -21,6 +22,7 @@
 #include "eevee_shadow.hh"
 
 #include "GPU_debug.hh"
+#include "GPU_timestamp.hh"
 
 #include "draw_common.hh"
 
@@ -1113,6 +1115,7 @@ gpu::Texture *DeferredLayer::render(View &render_view,
 
   {
     DRWGameProfileTimer _profile_setup(profile_game, profile.t_df_setup);
+    GPUTimestampScope _gpu_scope("df.prepass"); // UPBGE GPU plan §5
     GPU_framebuffer_bind(prepass_fb);
     /* Clear stencil buffer so that prepass can tag it. Then draw a full-screen triangle that
      * will clear AOVs for all the pixels touched by this layer. */
@@ -1125,17 +1128,24 @@ gpu::Texture *DeferredLayer::render(View &render_view,
 
   {
     DRWGameProfileTimer _profile_shadows(profile_game, profile.t_df_shadows);
-    inst_.hiz_buffer.swap_layer();
-    /* Update for lighting pass or AO node. */
-    inst_.hiz_buffer.update();
+    {
+      GPUTimestampScope _gpu_scope("df.hiz"); // UPBGE GPU plan §5
+      inst_.hiz_buffer.swap_layer();
+      /* Update for lighting pass or AO node. */
+      inst_.hiz_buffer.update();
+    }
 
     inst_.volume_probes.set_view(render_view);
     inst_.sphere_probes.set_view(render_view);
-    inst_.shadows.render(render_view, extent);
+    {
+      GPUTimestampScope _gpu_scope("df.shadows"); // UPBGE GPU plan §5
+      inst_.shadows.render(render_view, extent);
+    }
   }
 
   {
     DRWGameProfileTimer _profile_gbuffer(profile_game, profile.t_df_gbuffer);
+    GPUTimestampScope _gpu_scope("df.gbuffer"); // UPBGE GPU plan §5
     inst_.gbuffer.bind(gbuffer_fb);
     inst_.manager->submit(gbuffer_ps_, render_view);
   }
@@ -1146,6 +1156,7 @@ gpu::Texture *DeferredLayer::render(View &render_view,
 
   {
     DRWGameProfileTimer _profile_eval(profile_game, profile.t_df_eval_light);
+    GPUTimestampScope _gpu_scope("df.eval_light"); // UPBGE GPU plan §5
     if (use_raytracing_) {
       indirect_result_ = inst_.raytracing.render(
           rt_buffer, radiance_behind_tx, closure_bits_, render_view);
@@ -1211,6 +1222,7 @@ gpu::Texture *DeferredLayer::render(View &render_view,
       const int dr_layer_2 = (closure_count > 2) ? 2 : 0;
 
       {
+        GPUTimestampScope _gpu_scope("shd.temporal"); // UPBGE GPU plan §5
         PassSimple &pass = shadow_denoise_temporal_ps_;
         pass.init();
         gpu::Shader *sh = inst_.shaders.static_shader_get(SHADOW_DENOISE_TEMPORAL);
@@ -1244,6 +1256,10 @@ gpu::Texture *DeferredLayer::render(View &render_view,
        * temporally accumulated radiance + moments; the last writes the direct radiance
        * buffers; the intermediate ones read and write the scratch buffers. */
       for (int i = 0; i < 4; i++) {
+        /* UPBGE GPU plan §5: one GPU timestamp scope per a-trous iteration. */
+        char gpu_scope_name[32];
+        SNPRINTF(gpu_scope_name, "shd.atrous%d", i);
+        GPUTimestampScope _gpu_scope(gpu_scope_name);
         const bool is_final = (i == 3);
         PassSimple &pass = shadow_denoise_atrous_ps_[i];
         pass.init();
@@ -1280,6 +1296,7 @@ gpu::Texture *DeferredLayer::render(View &render_view,
 
   {
     DRWGameProfileTimer _profile_combine(profile_game, profile.t_df_combine);
+    GPUTimestampScope _gpu_scope("df.combine"); // UPBGE GPU plan §5
     radiance_feedback_tx_ = rt_buffer.feedback_ensure(!use_feedback_output_, extent);
 
     if (use_feedback_output_ && use_clamp_direct_) {

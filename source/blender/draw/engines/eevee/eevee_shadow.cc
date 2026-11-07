@@ -17,10 +17,12 @@
 
 #include "GPU_context.hh"
 #include "eevee_instance.hh"
-
 #include "GPU_debug.hh"
+#include "GPU_timestamp.hh"
 #include "draw_cache.hh"
 #include "draw_debug.hh"
+
+#include "DRW_render.hh" /* UPBGE GPU plan §5: game work counters (BGE_GPU_PROFILE). */
 
 namespace blender::eevee {
 
@@ -713,6 +715,22 @@ void ShadowModule::init()
       statistics_buf_.current().read();
       stats = statistics_buf_.current();
       stats_valid = true;
+    }
+
+    /* UPBGE GPU plan §5.5: keep the last valid statistics for the BGE_GPU_PROFILE
+     * work counters (emitted once per frame by the telemetry writer). */
+    if (stats_valid) {
+      last_statistics_ = stats;
+      last_statistics_valid_ = true;
+    }
+    if (DRW_game_render_loop_is_active()) {
+      DRWGameWorkCounters &wc = DRW_game_work_counters_get();
+      wc.shadow_stats_valid = last_statistics_valid_;
+      wc.shadow_page_used = last_statistics_.page_used_count;
+      wc.shadow_page_update = last_statistics_.page_update_count;
+      wc.shadow_page_allocated = last_statistics_.page_allocated_count;
+      wc.shadow_page_rendered = last_statistics_.page_rendered_count;
+      wc.shadow_view_needed = last_statistics_.view_needed_count;
     }
 
     if (stats_valid && stats.page_used_count > shadow_page_len_ && enabled_) {
@@ -1411,7 +1429,17 @@ void ShadowModule::render(View &view, int2 extent)
 
       run_tagging_ = (loop_count == 0);
 
+      /* UPBGE GPU plan §5: shadow sub-phase timestamp scopes (first update loop only;
+       * extra loops are rare and would duplicate scope names in the frame results). */
+      const bool gpu_scopes = (loop_count == 0);
+      if (gpu_scopes) {
+        GPU_timestamp_scope_begin("shadow.tagging");
+      }
       inst_.manager->submit(tilemap_setup_ps_, view);
+      if (gpu_scopes) {
+        GPU_timestamp_scope_end();
+        GPU_timestamp_scope_begin("shadow.caster_update");
+      }
       if (loop_count == 0) {
         if (assign_if_different(update_casters_, false)) {
           /* Run caster update only once. */
@@ -1423,7 +1451,14 @@ void ShadowModule::render(View &view, int2 extent)
         inst_.manager->submit(update_propagate_ps_, view);
         inst_.manager->submit(tilemap_usage_ps_, view);
       }
+      if (gpu_scopes) {
+        GPU_timestamp_scope_end();
+        GPU_timestamp_scope_begin("shadow.tilemap_update");
+      }
       inst_.manager->submit(tilemap_update_ps_, view);
+      if (gpu_scopes) {
+        GPU_timestamp_scope_end();
+      }
 
       shadow_multi_view_.compute_procedural_bounds();
 
@@ -1444,6 +1479,9 @@ void ShadowModule::render(View &view, int2 extent)
         GPU_flush();
       }
 
+      if (gpu_scopes) {
+        GPU_timestamp_scope_begin("shadow.raster");
+      }
       GPU_framebuffer_bind(render_fb_);
       const int4 &largest_viewport = multi_viewports_[SHADOW_TILEMAP_LOD];
       if (GPU_multi_viewport_support()) {
@@ -1468,6 +1506,9 @@ void ShadowModule::render(View &view, int2 extent)
       }
 
       GPU_memory_barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS | GPU_BARRIER_TEXTURE_FETCH);
+      if (gpu_scopes) {
+        GPU_timestamp_scope_end();
+      }
     }
     GPU_debug_group_end();
 

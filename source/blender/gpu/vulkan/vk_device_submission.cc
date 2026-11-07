@@ -12,6 +12,8 @@
 
 #include "BLI_mutex.hh"
 
+#include "GPU_timestamp.hh"
+
 #include "vk_device.hh"
 #include "vk_to_string.hh"
 
@@ -76,6 +78,7 @@ TimelineValue VKDevice::render_graph_submit(render_graph::VKRenderGraph *render_
   }
   TimelineValue timeline = 0;
   {
+    GPUPerfBucketTimer enqueue_timer(GPU_PERF_BUCKET_SUBMIT_ENQUEUE);
     std::scoped_lock lock(orphaned_data.mutex_get());
     timeline = submit_task->timeline = submit_to_device ? ++timeline_value_ : timeline_value_ + 1;
     orphaned_data.timeline_ = timeline;
@@ -86,11 +89,13 @@ TimelineValue VKDevice::render_graph_submit(render_graph::VKRenderGraph *render_
   submit_task = nullptr;
 
   if (wait_for_submission) {
+    GPUPerfBucketTimer wait_timer(GPU_PERF_BUCKET_WAIT_FOR_SUBMISSION);
     std::unique_lock<Mutex> lock(wait_condition.is_submitted_mutex);
     wait_condition.is_submitted_condition.wait(lock, [&] { return wait_condition.is_submitted; });
   }
 
   if (wait_for_completion) {
+    GPUPerfBucketTimer wait_timer(GPU_PERF_BUCKET_WAIT_TIMELINE);
     wait_for_timeline(timeline);
   }
   return timeline;
@@ -197,11 +202,17 @@ void VKDevice::submission_runner(VKDevice *device)
 
     render_graph::VKRenderGraph &render_graph = *submit_task->render_graph;
     Span<render_graph::NodeHandle> node_handles = scheduler.select_nodes(render_graph);
+    /* GPU work counters (UPBGE GPU plan §5.5); no-op while the telemetry is disabled. */
+    render_graph.stats_add(node_handles);
     {
+      GPUPerfBucketTimer build_timer(GPU_PERF_BUCKET_RENDER_GRAPH_BUILD);
       std::scoped_lock lock_resources(device->resources.mutex);
       command_builder.build_nodes(render_graph, *command_buffer, node_handles);
     }
-    command_builder.record_commands(render_graph, *command_buffer, node_handles);
+    {
+      GPUPerfBucketTimer record_timer(GPU_PERF_BUCKET_RENDER_GRAPH_RECORD);
+      command_builder.record_commands(render_graph, *command_buffer, node_handles);
+    }
     num_nodes += node_handles.size();
 
     if (submit_task->submit_to_device) {
@@ -241,6 +252,7 @@ void VKDevice::submission_runner(VKDevice *device)
       num_nodes = 0;
 
       {
+        GPUPerfBucketTimer enqueue_timer(GPU_PERF_BUCKET_SUBMIT_ENQUEUE);
         std::scoped_lock lock_queue(*device->queue_mutex_);
         device->functions.vkQueueSubmit(
             device->vk_queue_, 1, &vk_submit_info, submit_task->signal_fence);

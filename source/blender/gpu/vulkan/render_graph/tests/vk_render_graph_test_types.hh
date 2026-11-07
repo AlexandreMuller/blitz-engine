@@ -436,6 +436,17 @@ class CommandBufferLog : public VKCommandBufferInterface {
                         uint32_t /*query_count*/) override
   {
   }
+  void write_timestamp(VkQueryPool vk_query_pool,
+                       uint32_t query_index,
+                       VkPipelineStageFlagBits stage) override
+  {
+    EXPECT_TRUE(is_recording_);
+    std::stringstream ss;
+    ss << "write_timestamp(vk_query_pool=" << to_string(vk_query_pool);
+    ss << ", query_index=" << query_index;
+    ss << ", stage=" << to_string_vk_pipeline_stage_flags(stage) << ")";
+    log_.append(ss.str());
+  }
 
   void set_viewport(const Vector<VkViewport> viewports) override
   {

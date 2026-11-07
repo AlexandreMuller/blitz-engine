@@ -105,6 +105,7 @@ set(SRC
   intern/gpu_texture_external.cc
   intern/gpu_texture_mipmap.cc
   intern/gpu_texture_pool.cc
+  intern/gpu_timestamp.cc
   intern/gpu_uniform_buffer.cc
   intern/gpu_vertex_buffer.cc
   intern/gpu_vertex_format.cc
@@ -180,6 +181,7 @@ set(SRC
   GPU_storage_buffer.hh
   GPU_texture.hh
   GPU_texture_pool.hh
+  GPU_timestamp.hh
   GPU_uniform_buffer.hh
   GPU_vertex_buffer.hh
   GPU_vertex_format.hh
@@ -333,6 +335,7 @@ set(VULKAN_SRC
   vulkan/vk_streaming_buffer.cc
   vulkan/vk_texture.cc
   vulkan/vk_texture_pool.cc
+  vulkan/vk_timestamp.cc
   vulkan/vk_to_string.cc
   vulkan/vk_uniform_buffer.cc
   vulkan/vk_vertex_attribute_object.cc
@@ -393,6 +396,7 @@ set(VULKAN_SRC
   vulkan/render_graph/nodes/vk_synchronization_node.hh
   vulkan/render_graph/nodes/vk_update_buffer_node.hh
   vulkan/render_graph/nodes/vk_update_mipmaps_node.hh
+  vulkan/render_graph/nodes/vk_write_timestamp_node.hh
   vulkan/render_graph/vk_command_buffer_wrapper.hh
   vulkan/render_graph/vk_command_builder.hh
   vulkan/render_graph/vk_render_graph.hh
@@ -415,6 +419,7 @@ set(VULKAN_SRC
   vulkan/vk_streaming_buffer.hh
   vulkan/vk_texture.hh
   vulkan/vk_texture_pool.hh
+  vulkan/vk_timestamp.hh
   vulkan/vk_to_string.hh
   vulkan/vk_uniform_buffer.hh
   vulkan/vk_vertex_attribute_object.hh
@@ -992,6 +997,7 @@ if(WITH_GTESTS)
       vulkan/render_graph/tests/vk_render_graph_test_present.cc
       vulkan/render_graph/tests/vk_render_graph_test_render.cc
       vulkan/render_graph/tests/vk_render_graph_test_scheduler.cc
+      vulkan/render_graph/tests/vk_render_graph_test_timestamp.cc
       vulkan/render_graph/tests/vk_render_graph_test_transfer.cc
 
       vulkan/render_graph/tests/vk_render_graph_test_types.hh

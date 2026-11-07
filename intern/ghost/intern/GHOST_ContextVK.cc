@@ -44,6 +44,7 @@
 
 #include "BLI_string_ref.hh"
 #include "BLI_vector.hh"
+#include "GPU_timestamp.hh" /* UPBGE GPU plan §5: CPU wait buckets (BGE_GPU_PROFILE). */
 
 #include <algorithm>
 #include <array>
@@ -993,6 +994,8 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
    * still happen in parallel, but acquiring needs can only happen when the frame acquire semaphore
    * has been signaled and waited for. */
   if (submission_frame_data.submission_fence) {
+    /* UPBGE GPU plan §5.4: CPU blocked on the frame slot fence. */
+    blender::GPUPerfBucketTimer _gpu_perf(blender::GPU_PERF_BUCKET_FRAME_SLOT_FENCE_WAIT);
     device_vk.functions.vkWaitForFences(
         vk_device, 1, &submission_frame_data.submission_fence, true, UINT64_MAX);
   }
@@ -1040,6 +1043,8 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferAcquire()
   /* Acquire next image, swapchain can be (or become) invalid when minimizing window. */
   uint32_t image_index = 0;
   if (swapchain_ != VK_NULL_HANDLE) {
+    /* UPBGE GPU plan §5.4: CPU blocked acquiring the next swapchain image. */
+    blender::GPUPerfBucketTimer _gpu_perf(blender::GPU_PERF_BUCKET_SWAPCHAIN_ACQUIRE);
     /* Some platforms (NVIDIA/Wayland) can receive an out of date swapchain when acquiring the next
      * swapchain image. Other do it when calling vkQueuePresent. */
     VkResult acquire_result = VK_ERROR_OUT_OF_DATE_KHR;
@@ -1185,7 +1190,12 @@ GHOST_TSuccess GHOST_ContextVK::swapBufferRelease()
 
       present_info.pNext = &fence_info;
     }
-    present_result = device_vk.functions.vkQueuePresentKHR(device_vk.generic_queue, &present_info);
+    {
+      /* UPBGE GPU plan §5.4: CPU time spent inside vkQueuePresentKHR. */
+      blender::GPUPerfBucketTimer _gpu_perf(blender::GPU_PERF_BUCKET_PRESENT_SUBMIT);
+      present_result = device_vk.functions.vkQueuePresentKHR(device_vk.generic_queue,
+                                                             &present_info);
+    }
     this->setPresentFence(swapchain_, present_fence);
   }
   acquired_swapchain_image_index_.reset();

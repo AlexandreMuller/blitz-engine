@@ -261,6 +261,11 @@ class ShadowModule {
   /* Statistics that are read back to CPU after a few frame (to avoid stall). */
   SwapChain<ShadowStatisticsBuf, 5> statistics_buf_;
 
+  /* UPBGE GPU plan §5.5: last successfully polled statistics, exposed to the
+   * BGE_GPU_PROFILE work counters (see #last_statistics_get). */
+  ShadowStatistics last_statistics_ = {};
+  bool last_statistics_valid_ = false;
+
   /** \} */
 
   /* -------------------------------------------------------------------- */
@@ -385,6 +390,14 @@ class ShadowModule {
   void reset()
   {
     do_full_update_ = true;
+  }
+
+  /* UPBGE GPU plan §5.5: last asynchronously polled shadow statistics. `r_valid` is false
+   * when no readback has completed yet (first frames). */
+  const ShadowStatistics &last_statistics_get(bool &r_valid) const
+  {
+    r_valid = last_statistics_valid_;
+    return last_statistics_;
   }
 
  private:

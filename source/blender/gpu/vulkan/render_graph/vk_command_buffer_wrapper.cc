@@ -348,6 +348,13 @@ void VKCommandBufferWrapper::reset_query_pool(VkQueryPool vk_query_pool,
   functions->vkCmdResetQueryPool(vk_command_buffer_, vk_query_pool, first_query, query_count);
 }
 
+void VKCommandBufferWrapper::write_timestamp(VkQueryPool vk_query_pool,
+                                             uint32_t query_index,
+                                             VkPipelineStageFlagBits stage)
+{
+  functions->vkCmdWriteTimestamp(vk_command_buffer_, stage, vk_query_pool, query_index);
+}
+
 void VKCommandBufferWrapper::begin_debug_utils_label(
     const VkDebugUtilsLabelEXT *vk_debug_utils_label)
 {

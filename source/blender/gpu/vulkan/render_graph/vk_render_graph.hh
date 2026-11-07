@@ -249,6 +249,7 @@ class VKRenderGraph : public NonCopyable {
   ADD_NODE(VKUpdateBufferNode)
   ADD_NODE(VKUpdateMipmapsNode)
   ADD_NODE(VKSynchronizationNode)
+  ADD_NODE(VKWriteTimestampNode)
 #undef ADD_NODE
 
   /**
@@ -320,6 +321,14 @@ class VKRenderGraph : public NonCopyable {
    * Reset the render graph.
    */
   void reset();
+
+  /**
+   * Accumulate GPU work counters (draws, dispatches, groups, vertices, instances) of the given
+   * nodes into the global telemetry counters (UPBGE GPU plan §5.5). Called by the submission
+   * thread right after `VKScheduler::select_nodes` while the resources are locked. Cheap no-op
+   * while the telemetry is disabled.
+   */
+  void stats_add(Span<NodeHandle> node_handles) const;
 
   void memstats() const;
 

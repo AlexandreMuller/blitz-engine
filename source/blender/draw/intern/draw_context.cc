@@ -27,6 +27,7 @@
 #include "BLI_sys_types.hh"
 #include "BLI_task_c.hh"
 #include "BLI_threads.hh"
+#include "BLI_utildefines.hh"
 
 #include "BLF_api.hh"
 
@@ -82,6 +83,7 @@
 #include "GPU_platform.hh"
 #include "GPU_shader_shared.hh"
 #include "GPU_state.hh"
+#include "GPU_timestamp.hh"
 #include "GPU_uniform_buffer.hh"
 #include "GPU_viewport.hh"
 
@@ -3307,6 +3309,13 @@ DRWGameProfileStats &DRW_game_profile_get()
         s.log_file = fopen(env, "a");
         s.enabled = true;
       }
+      s.dump_enabled = s.enabled;
+    }
+    /* The async GPU telemetry writer needs the same DRW timers for its "cpu_frame"
+     * records, so collect them when BGE_GPU_PROFILE is set as well. */
+    const char *gpu_env = getenv("BGE_GPU_PROFILE");
+    if (gpu_env && gpu_env[0] != '\0') {
+      s.enabled = true;
     }
     const char *interval = getenv("BGE_RENDER_PROFILE_INTERVAL");
     if (interval && atoi(interval) > 0) {
@@ -3343,7 +3352,7 @@ void DRWGameProfileStats::reset_frame()
 
 void DRWGameProfileStats::dump_frame()
 {
-  if (!enabled) {
+  if (!dump_enabled) {
     return;
   }
   ++frame_count;
@@ -3519,6 +3528,232 @@ void DRW_bge_cam_trace_stage(const char *stage,
     fprintf(trace.file, ",%s", extra_json);
   }
   fprintf(trace.file, "}\n");
+}
+
+/* UPBGE GPU plan §5: asynchronous GPU timestamp telemetry + CPU wait buckets + GPU work
+ * counters writer. One JSONL record per frame ("cpu_frame") plus one per finished GPU frame
+ * ("gpu_frame", published a few frames later, never blocking). Enabled with
+ * BGE_GPU_PROFILE=<file.jsonl>; a boolean-like value writes to stdout. */
+
+void DRWGameWorkCounters::reset_frame()
+{
+  *this = DRWGameWorkCounters();
+}
+
+DRWGameWorkCounters &DRW_game_work_counters_get()
+{
+  static DRWGameWorkCounters counters;
+  return counters;
+}
+
+struct BGEGpuProfileWriter {
+  bool init = false;
+  bool enabled = false;
+  bool header_written = false;
+  FILE *file = nullptr;
+  /* 1-based, same convention as BGE_CAM_TRACE (Python bench frames are 0-based). */
+  uint64_t frame = 0;
+  /* DRW timer snapshot taken at frame begin; "cpu_frame" emits per-frame deltas. */
+  DRWGameProfileStats snapshot;
+};
+
+static void bge_gpu_profile_result_cb(void * /*userdata*/,
+                                      uint64_t frame_id,
+                                      uint32_t scope_count,
+                                      const char *const *names,
+                                      const double *durations_ms,
+                                      const bool *valid);
+
+static BGEGpuProfileWriter &bge_gpu_profile_get()
+{
+  static BGEGpuProfileWriter writer;
+  if (!writer.init) {
+    writer.init = true;
+    const char *env = getenv("BGE_GPU_PROFILE");
+    if (env && env[0] != '\0') {
+      if (env[0] == '1' || env[0] == 't' || env[0] == 'T' || env[0] == 'y' || env[0] == 'Y') {
+        writer.enabled = true; /* stdout */
+      }
+      else {
+        writer.file = fopen(env, "a");
+        writer.enabled = (writer.file != nullptr);
+      }
+      if (writer.enabled) {
+        GPU_timestamp_set_enabled(true);
+        GPU_timestamp_set_result_callback(bge_gpu_profile_result_cb, nullptr);
+      }
+    }
+  }
+  return writer;
+}
+
+bool DRW_game_gpu_profile_is_enabled()
+{
+  return bge_gpu_profile_get().enabled;
+}
+
+void DRW_game_gpu_profile_begin_frame()
+{
+  BGEGpuProfileWriter &writer = bge_gpu_profile_get();
+  if (!writer.enabled) {
+    return;
+  }
+  writer.frame++;
+  /* Publish older frames first: by now the previous frame was closed and submitted by the
+   * (render-ahead) swap at the top of KX_KetsjiEngine::BeginFrame. */
+  GPU_timestamp_poll();
+  GPU_timestamp_frame_begin(writer.frame);
+  GPU_timestamp_scope_begin("frame_total");
+  if (!writer.header_written) {
+    writer.header_written = true;
+    FILE *out = writer.file ? writer.file : stdout;
+    const char *exe_path = BKE_appdir_program_path();
+    fprintf(out,
+            "{\"type\":\"header\",\"exe\":\"%s\",\"gpu\":\"%s\",\"driver\":\"%s\","
+            "\"timestamp_period_ns\":%g,\"gpu_timestamps_supported\":%d}\n",
+            exe_path ? BLI_path_basename(exe_path) : "?",
+            GPU_platform_renderer(),
+            GPU_platform_version(),
+            double(GPU_timestamp_period_ns_get()),
+            GPU_timestamp_is_supported() ? 1 : 0);
+    fflush(out);
+  }
+  writer.snapshot = DRW_game_profile_get();
+  DRW_game_work_counters_get().reset_frame();
+}
+
+void DRW_game_gpu_profile_end_frame()
+{
+  BGEGpuProfileWriter &writer = bge_gpu_profile_get();
+  if (!writer.enabled) {
+    return;
+  }
+  FILE *out = writer.file ? writer.file : stdout;
+  DRWGameProfileStats &cur = DRW_game_profile_get();
+
+  uint64_t bucket_ns[GPU_PERF_BUCKET_NUM];
+  uint64_t bucket_count[GPU_PERF_BUCKET_NUM];
+  GPU_perf_bucket_drain(bucket_ns, bucket_count);
+  uint64_t counters[GPU_PERF_COUNTER_NUM];
+  GPU_perf_counter_drain(counters);
+  const DRWGameWorkCounters &wc = DRW_game_work_counters_get();
+
+  static const char *bucket_names[GPU_PERF_BUCKET_NUM] = {
+      "frame_slot_fence_wait",
+      "swapchain_acquire",
+      "present_submit",
+      "render_graph_build",
+      "render_graph_record",
+      "submit_enqueue",
+      "wait_for_submission",
+      "wait_timeline",
+      "readback"};
+
+  fprintf(out, "{\"type\":\"cpu_frame\",\"f\":%llu", (unsigned long long)writer.frame);
+  fprintf(out, ",\"cpu_buckets_ms\":{");
+  for (int i = 0; i < GPU_PERF_BUCKET_NUM; i++) {
+    fprintf(out,
+            "%s\"%s\":[%.4f,%llu]",
+            i ? "," : "",
+            bucket_names[i],
+            double(bucket_ns[i]) / 1e6,
+            (unsigned long long)bucket_count[i]);
+  }
+  fprintf(out, "}");
+  fprintf(out,
+          ",\"work\":{\"draws\":%llu,\"draws_indexed\":%llu,\"draws_indirect\":%llu,"
+          "\"dispatches\":%llu,\"dispatches_indirect\":%llu,\"dispatch_groups\":%llu,"
+          "\"vertices\":%llu,\"instances\":%llu,\"nodes_submitted\":%llu}",
+          (unsigned long long)counters[GPU_PERF_COUNTER_DRAW],
+          (unsigned long long)counters[GPU_PERF_COUNTER_DRAW_INDEXED],
+          (unsigned long long)counters[GPU_PERF_COUNTER_DRAW_INDIRECT],
+          (unsigned long long)counters[GPU_PERF_COUNTER_DISPATCH],
+          (unsigned long long)counters[GPU_PERF_COUNTER_DISPATCH_INDIRECT],
+          (unsigned long long)counters[GPU_PERF_COUNTER_DISPATCH_GROUPS],
+          (unsigned long long)counters[GPU_PERF_COUNTER_VERTICES],
+          (unsigned long long)counters[GPU_PERF_COUNTER_INSTANCES],
+          (unsigned long long)counters[GPU_PERF_COUNTER_NODES_SUBMITTED]);
+  fprintf(out,
+          ",\"drw_ms\":{\"kx_tag_loop\":%.4f,\"kx_depsgraph\":%.4f,\"kx_tag_eval\":%.4f,"
+          "\"acquire\":%.4f,\"sync\":%.4f,\"draw\":%.4f,\"release\":%.4f,"
+          "\"rs_main_view\":%.4f,\"df_shadows\":%.4f}",
+          double(cur.t_kx_tag_loop - writer.snapshot.t_kx_tag_loop) * 1e3,
+          double(cur.t_kx_depsgraph - writer.snapshot.t_kx_depsgraph) * 1e3,
+          double(cur.t_kx_tag_eval - writer.snapshot.t_kx_tag_eval) * 1e3,
+          double(cur.t_acquire - writer.snapshot.t_acquire) * 1e3,
+          double(cur.t_sync - writer.snapshot.t_sync) * 1e3,
+          double(cur.t_draw - writer.snapshot.t_draw) * 1e3,
+          double(cur.t_release - writer.snapshot.t_release) * 1e3,
+          double(cur.t_rs_main_view - writer.snapshot.t_rs_main_view) * 1e3,
+          double(cur.t_df_shadows - writer.snapshot.t_df_shadows) * 1e3);
+  fprintf(out,
+          ",\"shadow\":{\"valid\":%d,\"page_used\":%d,\"page_update\":%d,"
+          "\"page_allocated\":%d,\"page_rendered\":%d,\"view_needed\":%d}",
+          wc.shadow_stats_valid ? 1 : 0,
+          wc.shadow_page_used,
+          wc.shadow_page_update,
+          wc.shadow_page_allocated,
+          wc.shadow_page_rendered,
+          wc.shadow_view_needed);
+  fprintf(out,
+          ",\"rt\":{\"bins_active\":%d,\"fast_gi\":%d},\"lod_switches\":%d",
+          wc.rt_closure_bins_active,
+          wc.rt_fast_gi_active ? 1 : 0,
+          wc.lod_switches);
+  fprintf(out,
+          ",\"gpu_dropped\":%llu,\"gpu_scopes_invalid\":%llu}\n",
+          (unsigned long long)GPU_timestamp_dropped_frames_get(),
+          (unsigned long long)GPU_timestamp_invalid_scopes_get());
+  /* Keep the DRW accumulation bounded when the text dump is not consuming it. */
+  if (!cur.dump_enabled) {
+    cur.reset_frame();
+  }
+  fflush(out);
+  /* The frame is over: stop lazy multi-context recording (scopes executed after this belong
+   * to the still-open backend frames only, e.g. the window context's blit at the next swap). */
+  GPU_timestamp_frame_end();
+}
+
+static void bge_gpu_profile_result_cb(void * /*userdata*/,
+                                      uint64_t frame_id,
+                                      uint32_t scope_count,
+                                      const char *const *names,
+                                      const double *durations_ms,
+                                      const bool *valid)
+{
+  BGEGpuProfileWriter &writer = bge_gpu_profile_get();
+  if (!writer.enabled) {
+    return;
+  }
+  FILE *out = writer.file ? writer.file : stdout;
+  /* GPU total comes from the "frame_total" scope only, never from a sum (plan §5 rule:
+   * summing pass durations would mis-account overlap between async passes). Contexts other
+   * than the window context (e.g. DRW's offscreen viewport context carrying the EEVEE
+   * per-pass scopes) have no frame_total scope; their records omit gpu_total_ms and the
+   * analyzer merges records per frame id. */
+  double total_ms = 0.0;
+  bool has_total = false;
+  int invalid = 0;
+  bool first = true;
+  fprintf(out, "{\"type\":\"gpu_frame\",\"f\":%llu,\"scopes\":{", (unsigned long long)frame_id);
+  for (uint32_t i = 0; i < scope_count; i++) {
+    if (!valid[i]) {
+      invalid++;
+      continue;
+    }
+    if (STREQ(names[i], "frame_total")) {
+      total_ms = durations_ms[i];
+      has_total = true;
+      continue;
+    }
+    fprintf(out, "%s\"%s\":%.4f", first ? "" : ",", names[i], durations_ms[i]);
+    first = false;
+  }
+  fprintf(out, "}");
+  if (has_total) {
+    fprintf(out, ",\"gpu_total_ms\":%.4f", total_ms);
+  }
+  fprintf(out, ",\"scopes_invalid\":%d}\n", invalid);
 }
 
 /* UPBGE Fase B1: set for the duration of DRW_game_render_loop so engines can gate

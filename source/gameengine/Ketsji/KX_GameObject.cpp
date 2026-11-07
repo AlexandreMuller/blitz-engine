@@ -50,6 +50,7 @@
 #include "DEG_depsgraph_query.hh"
 #include "DNA_mesh_types.h"
 #include "DNA_scene_types.h"
+#include "DRW_render.hh"
 #include "WM_api.hh"
 
 #include "BL_Action.h"
@@ -1340,6 +1341,8 @@ void KX_GameObject::UpdateLod(const MT_Vector3 &cam_pos, float lodfactor)
     RAS_MeshObject *mesh = lodLevel->GetMesh();
     if (mesh != m_meshes[0]) {
       scene->ReplaceMesh(this, mesh, true, false);
+      /* UPBGE GPU plan §5.5: work counter for the BGE_GPU_PROFILE telemetry. */
+      DRW_game_work_counters_get().lod_switches++;
     }
     m_currentLodLevel = lodLevel->GetLevel();
   }

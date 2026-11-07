@@ -9,6 +9,7 @@
 #include "DNA_userdef_types.h"
 
 #include "GPU_debug.hh"
+#include "GPU_timestamp.hh"
 
 #include "gpu_capabilities_private.hh"
 
@@ -146,6 +147,12 @@ void VKContext::activate()
 void VKContext::deactivate()
 {
   flush_render_graph(RenderGraphFlushFlags(0));
+  /* NOTE: the GPU timestamp ring is deliberately left untouched here. The game engine
+   * deactivates the context right before presenting (GPU_context_main_unlock), and the
+   * recording frame is closed and submitted afterwards by #swap_buffer_draw_handler, which
+   * flushes this same render graph. Discarding the recording here would silently drop every
+   * frame's GPU telemetry. If a context is deactivated and its graph never gets submitted,
+   * the pending slot simply never resolves and the ring eventually reports drops. */
   immDeactivate();
   thread_data_.reset();
 
@@ -156,6 +163,14 @@ void VKContext::begin_frame() {}
 
 void VKContext::end_frame()
 {
+  /* Offscreen contexts (e.g. DRW's viewport context that renders the game's EEVEE scene) run
+   * a begin_frame/end_frame cycle per draw. Close any open telemetry frame here: all of the
+   * frame's scopes have been recorded by the time DRW releases the context. Window contexts
+   * must NOT close here — their blit scope is recorded after end_frame, in the swap handler
+   * (see swap_chain_pre_present_handler_, which closes their frame). */
+  if (ghost_window_ == nullptr && timestamp_ring_.is_recording()) {
+    timestamp_ring_.frame_close(*this);
+  }
   this->process_frame_timings();
 }
 
@@ -220,6 +235,68 @@ void VKContext::memory_statistics_get(int *r_total_mem_kb, int *r_free_mem_kb)
   const VKDevice &device = VKBackend::get().device;
   device.memory_statistics_get(r_total_mem_kb, r_free_mem_kb);
 }
+
+/* -------------------------------------------------------------------- */
+/** \name GPU timestamp telemetry (UPBGE GPU plan §5)
+ * \{ */
+
+bool VKContext::timestamp_is_supported()
+{
+  return timestamp_ring_.is_supported();
+}
+
+float VKContext::timestamp_period_ns_get()
+{
+  return timestamp_ring_.timestamp_period_ns_get();
+}
+
+bool VKContext::timestamp_frame_begin(uint64_t frame_id)
+{
+  return timestamp_ring_.frame_begin(*this, frame_id);
+}
+
+void VKContext::timestamp_frame_close()
+{
+  timestamp_ring_.frame_close(*this);
+}
+
+void VKContext::timestamp_scope_begin(const char *name)
+{
+  /* Multi-context recording: the game frame is opened on the window context, but EEVEE runs
+   * on DRW's offscreen viewport context. Any context that executes an instrumented scope
+   * while a frame is open lazily starts recording that same frame id here, so per-pass scopes
+   * are recorded where the work actually runs. */
+  if (!timestamp_ring_.is_recording()) {
+    const uint64_t frame_id = GPU_timestamp_recording_frame_id();
+    if (frame_id == 0 || !timestamp_ring_.frame_begin(*this, frame_id)) {
+      return;
+    }
+  }
+  timestamp_ring_.scope_begin(*this, name);
+}
+
+void VKContext::timestamp_scope_end()
+{
+  timestamp_ring_.scope_end(*this);
+}
+
+uint32_t VKContext::timestamp_poll(GPUTimestampResultCallback callback, void *userdata)
+{
+  /* Multiple contexts may record scopes for the same frame id; poll every live ring. */
+  return VKGpuTimestampRing::poll_all(VKBackend::get().device, callback, userdata);
+}
+
+uint64_t VKContext::timestamp_dropped_frames_get()
+{
+  return VKGpuTimestampRing::dropped_frames_total();
+}
+
+uint64_t VKContext::timestamp_invalid_scopes_get()
+{
+  return VKGpuTimestampRing::invalid_scopes_total();
+}
+
+/** \} */
 
 /* -------------------------------------------------------------------- */
 /** \name State manager
@@ -445,6 +522,7 @@ void VKContext::swap_buffer_draw_handler(const GHOST_VulkanSwapChainData &swap_c
 
   /* When swapchain is invalid/minimized we only flush the render graph to free GPU resources. */
   if (!do_blit_to_swapchain) {
+    timestamp_frame_close();
     flush_render_graph(RenderGraphFlushFlags::SUBMIT | RenderGraphFlushFlags::RENEW_RENDER_GRAPH);
     return;
   }
@@ -457,6 +535,7 @@ void VKContext::swap_buffer_draw_handler(const GHOST_VulkanSwapChainData &swap_c
   device.resources.add_swapchain_image(swap_chain_data.image, "SwapchainImage");
 
   GPU_debug_group_begin("BackBuffer.Blit");
+  timestamp_ring_.scope_begin(*this, "blit");
   if (use_shader) {
     VKTexture swap_chain_texture("swap_chain_texture");
     swap_chain_texture.init_swapchain(swap_chain_data.image,
@@ -501,7 +580,12 @@ void VKContext::swap_buffer_draw_handler(const GHOST_VulkanSwapChainData &swap_c
   synchronization.vk_image_aspect = VK_IMAGE_ASPECT_COLOR_BIT;
   synchronization.vk_access_flags = VK_ACCESS_NONE;
   render_graph.add_node(synchronization);
+  timestamp_ring_.scope_end(*this);
   GPU_debug_group_end();
+
+  /* Close the GPU timestamp frame right before the final submission of this frame; this
+   * auto-closes any scope still open (including "frame_total"). */
+  timestamp_frame_close();
 
   wait_for_submission |= swap_chain_data.submission_fence != VK_NULL_HANDLE;
   flush_render_graph(RenderGraphFlushFlags::SUBMIT | RenderGraphFlushFlags::RENEW_RENDER_GRAPH |
