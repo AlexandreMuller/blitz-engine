@@ -601,6 +601,8 @@ bool DRW_game_gpu_profile_is_enabled();
 void DRW_game_gpu_profile_begin_frame();
 /* Called from KX_KetsjiEngine::EndFrame: emits the "cpu_frame" record. */
 void DRW_game_gpu_profile_end_frame();
+/* Blocking flush of pending GPU profile frames; call once at engine shutdown. */
+void DRW_game_gpu_profile_flush();
 
 /* GPU work counters filled by the draw engine / game engine (UPBGE GPU plan §5.5).
  * Reset and emitted per frame by the BGE_GPU_PROFILE writer. */
