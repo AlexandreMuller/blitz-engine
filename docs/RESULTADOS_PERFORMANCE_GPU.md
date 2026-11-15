@@ -4,6 +4,75 @@
 > Artefatos locais (JSONL brutos, traces, perfis, screenshots, fingerprints) ficam em
 > `areatest_tmp/perf_gpu/out/`.
 
+## Entrega 4 — Fechamento de limitações da Entrega 3 + Fase 3: Bins de closure, presets e controles independentes (2026-11-15)
+
+**Escopo executado:** fechamento das limitações registradas na Entrega 3 (cobertura no quit e
+orçamento de escopos GPU) + §6.1 (número real de bins de closure), §6.2 (caracterização
+eixo-a-eixo e preset combinado) e §6.3 (`screen_trace_max_steps` e
+`shadow_denoise_atrous_iterations` em DNA/RNA).
+
+**Configuração:** commit base `27578909e93` + diff local `97bf06c9860a` (18 arquivos, +221/-19);
+binário `blitzplayer_e4.exe` / `blender.exe` Release x64 (build 2026-11-08); bench City
+Street, 1280×720, warmup 120 + 600 frames medidos (`e4_baseline` e `e4_preset_perf_3r` com
+3 reps; varredura de eixo único com 1 rep por variante em `variants/`).
+
+### Mudanças
+
+| Arquivo | Mudança |
+|---|---|
+| `gpu/GPU_timestamp.hh`, `gpu/intern/gpu_timestamp{.cc,_context_private.hh}`, `gpu/vulkan/vk_context.{cc,hh}` | `GPU_timestamp_flush()` / `VKContext::timestamp_flush()`: drain bloqueante apenas no shutdown (`wait_queue_idle()` + `poll_all()`) para publicar os frames em voo ao sair |
+| `draw/intern/DRW_render.hh`, `draw/intern/draw_context.cc`, `KX_KetsjiEngine.cpp` | `DRW_game_gpu_profile_flush()` chamado em `KX_KetsjiEngine::StopEngine()`; deduplicação de escopos repetidos por camada (`#2`, `#3`) no JSONL para evitar colisão de chaves na camada de refração |
+| `gpu/vulkan/vk_timestamp.{hh,cc}` | `MAX_SCOPES` elevado de 64 para 128 (~86 escopos/frame com 2 camadas deferred); sentinela `-1` em `scope_stack_` quando houver overflow para não dessincronizar escopos pais |
+| `eevee_material.hh`, `eevee_raytrace.cc` | §6.1: `to_gbuffer_bin_mask()` + dimensionamento de `tile_raytrace_{denoise,tracing}_tx_` por `closure_bin_layers` real; `trace(..., false, ...)` mantido para bins inativos (preserva dummy/liberação de histórico); `wc.rt_closure_bins_active` conta bins reais (2 na City Street) |
+| `DNA_scene_types.h`, `rna_scene.cc`, `eevee_raytrace{.cc,_shared.hh}`, `eevee_ray_trace_screen_lib.bsl.hh` | §6.3: `ray_tracing_options.screen_trace_max_steps` (1–512, default 255; arquivos antigos lêem 0 e caem no fallback 255) |
+| `DNA_scene_types.h`, `rna_scene.cc`, `eevee_pipeline.cc` | §6.3: `eevee.shadow_denoise_atrous_iterations` (1–4, default 4; último passe ativo assume `atrous_final`; arquivos antigos caem no fallback 4) |
+| `gpu/tests/storage_buffer_test.cc` | Adicionado `test_storage_buffer_read_if_ready` (§4.1) |
+
+### Fechamento das limitações da Entrega 3
+
+- **Cobertura no quit:** subiu para **99,8–99,9%** em todas as 6 runs de `e4_baseline`
+  (719/720, 651/652, 655/656, 731/732, 720/721, 706/707 frames com `gpu_total_ms`; apenas o
+  último frame sem `SwapBuffers` antes de `StopEngine()` fica fora).
+- **Orçamento de escopos:** `MAX_SCOPES=128` eliminou o overflow silencioso da Entrega 3,
+  revelando a decomposição real de `sv.deferred` (7,55 ms em `still`): `df.eval_light`
+  (2,45 ms), `shd.temporal` + `shd.atrous0..3` (1,88 ms), `df.gbuffer` (1,55 ms),
+  `rt1.*` (1,16 ms), `df.prepass` (1,14 ms) e `fastgi.*` (0,96 ms). `gpu_dropped=0` e
+  `gpu_scopes_invalid=0` em todas as runs.
+- **GTests (`WITH_GTESTS=OFF`):** segue pendente de execução em build com `WITH_GTESTS=ON`.
+
+### A/B de performance — Baseline e varredura eixo-a-eixo (City Street, 1280×720, ms)
+
+Defaults mantidos sem regressão (`e4_baseline`, 3 reps: `still` `frame_p50=8,422 ms`,
+`gpu_p50=8,441 ms`, `gpu_p95=9,622 ms`; `translate` `frame_p50=7,629 ms`,
+`gpu_p50=7,569 ms`).
+
+| Variante (`still`) | Configuração alterada | `frame_p50` | `gpu_p50` | `gpu_p95` | `sv.deferred` | Passe alvo (mediana) |
+|---|---|---:|---:|---:|---:|---|
+| `e4_baseline` (3r) | defaults (bins=2 real) | 8,422 | 8,441 | 9,622 | 7,55 | — |
+| `e4_atrous2` | `shadow_denoise_atrous_iterations=2` | 8,062 | 8,062 | 9,432 | 7,20 | `shd.*`: 1,88 → 1,23 ms (-34,6%) |
+| `e4_steps64` | `screen_trace_max_steps=64` | 8,457 | 8,479 | 9,404 | 7,71 | `rt1.*`: 1,16 → 1,16 ms (sem cauda) |
+| `e4_rt1_4` | `ray_tracing_options.resolution_scale='4'` | 8,430 | 8,425 | 9,588 | 7,54 | `rt1.*`: 1,16 → 0,99 ms (-14,7%) |
+| `e4_fgi1_4` | `fast_gi_resolution='4'` | 8,107 | 8,146 | 9,353 | 7,24 | `fastgi.*`: 0,96 → 0,48 ms (-50,0%) |
+| `e4_rt_nodenoise` | `ray_tracing_options.use_denoise=False` | 7,548 | 7,475 | 8,127 | 6,23 | `rt1.*`: 1,16 → 0,35 ms (-69,8%) |
+| `e4_preset_perf_3r` (3r) | `atrous=2` + `steps=64` + `rt=1:4` + `fgi=1:4` | **7,721** | **7,729** | **8,630** | **6,47** | GPU p50 **-8,4%**, p95 **-10,3%** |
+
+Em `translate` (3 reps), `e4_preset_perf_3r` obteve `frame_p50=7,605 ms` e
+`gpu_p50=7,521 ms` (vs `7,629 / 7,569 ms` no `e4_baseline`).
+
+### Regressão funcional
+
+- `docs/test_shadow_denoise_ab.py` (`blender.exe --background --factory-startup`): **PASS**
+  (`penumbra` high-pass std reduction = 47,9%; `highlight` grad_ratio = 1,023,
+  peak_ratio = 1,000).
+
+### Decisão e próximos passos (Fase 4)
+
+- **Adotar** o código da Entrega 4 mantendo os defaults conservadores (`screen_trace_max_steps=255`,
+  `shadow_denoise_atrous_iterations=4`), deixando os presets para opt-in por cena.
+- A decomposição corrigida mostra que `df.eval_light` (2,45 ms) + `shd.*` (1,88 ms) +
+  `df.gbuffer`/`df.prepass` (2,69 ms) dominam `sv.deferred` (7,55 ms), enquanto `rt1.trace`
+  (0,13 ms) não é gargalo — guiando diretamente a priorização da Fase 4 (§7).
+
 ## Entrega 3 — Fase 2: Timestamps GPU Vulkan assíncronos, buckets de espera CPU e contadores de trabalho (2026-11-07)
 
 **Escopo executado:** §5 (timestamps GPU assíncronos por frame, esperas CPU separadas por
