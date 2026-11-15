@@ -216,6 +216,12 @@ void VKGpuTimestampRing::scope_begin(VKContext &context, const char *name)
   Slot &slot = slots_[recording_slot_];
   if (slot.scope_count >= MAX_SCOPES || scope_stack_len_ >= MAX_SCOPES) {
     invalid_scopes_++;
+    if (scope_stack_len_ < MAX_SCOPES) {
+      /* Entrega 4: push a sentinel so the matching scope_end pops an entry and the
+       * stack stays balanced; without it the end would close the parent scope early
+       * and desync every subsequent interval in the frame. */
+      scope_stack_[scope_stack_len_++] = -1;
+    }
     return;
   }
 

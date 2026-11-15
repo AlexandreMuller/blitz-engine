@@ -135,6 +135,7 @@ class VKContext : public Context, NonCopyable {
   void timestamp_scope_begin(const char *name) override;
   void timestamp_scope_end() override;
   uint32_t timestamp_poll(GPUTimestampResultCallback callback, void *userdata) override;
+  uint32_t timestamp_flush(GPUTimestampResultCallback callback, void *userdata) override;
   uint64_t timestamp_dropped_frames_get() override;
   uint64_t timestamp_invalid_scopes_get() override;
 

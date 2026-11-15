@@ -286,6 +286,14 @@ uint32_t VKContext::timestamp_poll(GPUTimestampResultCallback callback, void *us
   return VKGpuTimestampRing::poll_all(VKBackend::get().device, callback, userdata);
 }
 
+uint32_t VKContext::timestamp_flush(GPUTimestampResultCallback callback, void *userdata)
+{
+  /* Shutdown-only blocking drain (Entrega 4): wait for the queue so every pending
+   * slot's queries become available, then publish them all. */
+  VKBackend::get().device.wait_queue_idle();
+  return VKGpuTimestampRing::poll_all(VKBackend::get().device, callback, userdata);
+}
+
 uint64_t VKContext::timestamp_dropped_frames_get()
 {
   return VKGpuTimestampRing::dropped_frames_total();
