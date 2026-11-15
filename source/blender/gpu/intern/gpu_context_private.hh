@@ -133,6 +133,12 @@ class Context {
   {
     return 0;
   }
+  /* Blocking drain of every in-flight frame (shutdown paths only, Entrega 4). */
+  virtual uint32_t timestamp_flush(GPUTimestampResultCallback /*callback*/,
+                                   void * /*userdata*/)
+  {
+    return 0;
+  }
   virtual uint64_t timestamp_dropped_frames_get()
   {
     return 0;

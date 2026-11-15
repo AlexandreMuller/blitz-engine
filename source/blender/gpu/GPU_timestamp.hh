@@ -99,6 +99,12 @@ void GPU_timestamp_scope_end();
  * results became available. Returns the number of frames published.
  */
 uint32_t GPU_timestamp_poll();
+/**
+ * Blocking drain of all in-flight GPU frames (UPBGE GPU plan §5, Entrega 4): waits
+ * for the GPU queue to go idle, then publishes every pending slot through the result
+ * callback. Only for shutdown paths; never call mid-frame.
+ */
+uint32_t GPU_timestamp_flush();
 void GPU_timestamp_set_result_callback(GPUTimestampResultCallback callback, void *userdata);
 uint64_t GPU_timestamp_dropped_frames_get();
 uint64_t GPU_timestamp_invalid_scopes_get();

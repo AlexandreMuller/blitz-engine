@@ -112,6 +112,18 @@ uint32_t GPU_timestamp_poll()
   return ctx->timestamp_poll(g_result_callback, g_result_callback_userdata);
 }
 
+uint32_t GPU_timestamp_flush()
+{
+  if (!g_timestamp_enabled.load(std::memory_order_relaxed)) {
+    return 0;
+  }
+  gpu::Context *ctx = gpu::Context::get();
+  if (ctx == nullptr) {
+    return 0;
+  }
+  return ctx->timestamp_flush(g_result_callback, g_result_callback_userdata);
+}
+
 void GPU_timestamp_set_result_callback(GPUTimestampResultCallback callback, void *userdata)
 {
   g_result_callback = callback;

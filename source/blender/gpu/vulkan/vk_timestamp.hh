@@ -38,7 +38,10 @@ class VKDevice;
 class VKGpuTimestampRing {
  public:
   static constexpr int64_t SLOT_COUNT = 8;
-  static constexpr int64_t MAX_SCOPES = 64;
+  /* Entrega 4 (GPU plan §5): raised from 64 after the City Street profile showed
+   * 22 invalid scopes per frame overflowing the budget (two deferred layers emit ~86
+   * scopes/frame). */
+  static constexpr int64_t MAX_SCOPES = 128;
   /* 2 queries per scope: begin (TOP_OF_PIPE) + end (BOTTOM_OF_PIPE). */
   static constexpr int64_t QUERIES_PER_SLOT = MAX_SCOPES * 2;
 
