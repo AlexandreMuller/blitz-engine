@@ -516,12 +516,22 @@ RayTraceResult RayTraceModule::render(RayTraceBuffer &rt_buffer,
   tracing_dispatch_size_ = int3(raytrace_tiles, 1);
   fast_gi_tracing_dispatch_size_ = int3(raytrace_tiles_fast_gi, 1);
 
-  /* TODO(fclem): Use real max closure count from shader. */
-  const int closure_count = 3;
+  /* Entrega 4 (GPU plan §6.1): real bin count per frame. Bins are semantic gbuffer slot
+   * ids (0 = diffuse/SSS/refraction/translucent, 1 = reflection, 2 = clearcoat) and are not
+   * contiguous, so the tilemask textures keep one layer per bin id up to the highest active
+   * bin. The classify shader only writes layers for bins present in the gbuffer, so unused
+   * higher layers are never touched. */
+  const int closure_bins_mask = to_gbuffer_bin_mask(active_closures);
+  int closure_bin_layers = 1;
+  for (int i = 0; i < 3; i++) {
+    if (closure_bins_mask & (1 << i)) {
+      closure_bin_layers = i + 1;
+    }
+  }
   gpu::TextureFormat format = gpu::TextureFormat::RAYTRACE_TILEMASK_FORMAT;
   eGPUTextureUsage usage_rw = GPU_TEXTURE_USAGE_SHADER_READ | GPU_TEXTURE_USAGE_SHADER_WRITE;
-  tile_raytrace_denoise_tx_.ensure_2d_array(format, denoise_tiles, closure_count, usage_rw);
-  tile_raytrace_tracing_tx_.ensure_2d_array(format, raytrace_tiles, closure_count, usage_rw);
+  tile_raytrace_denoise_tx_.ensure_2d_array(format, denoise_tiles, closure_bin_layers, usage_rw);
+  tile_raytrace_tracing_tx_.ensure_2d_array(format, raytrace_tiles, closure_bin_layers, usage_rw);
   /* Kept as 2D array for compatibility with the tile compaction shader. */
   tile_fast_gi_denoise_tx_.ensure_2d_array(format, denoise_tiles, 1, usage_rw);
   tile_fast_gi_tracing_tx_.ensure_2d_array(format, raytrace_tiles_fast_gi, 1, usage_rw);
@@ -571,7 +581,9 @@ RayTraceResult RayTraceModule::render(RayTraceBuffer &rt_buffer,
   /* UPBGE GPU plan §5.5: work counters for the BGE_GPU_PROFILE telemetry. */
   {
     DRWGameWorkCounters &wc = DRW_game_work_counters_get();
-    wc.rt_closure_bins_active = has_active_closure ? min_ii(3, count_bits_i(active_closures)) : 0;
+    /* Entrega 4: count gbuffer bins, not raw closure bits (emission/holdout/AO bits are
+     * not bins and diffuse+SSS+refraction share bin 0). */
+    wc.rt_closure_bins_active = count_bits_i(closure_bins_mask);
     wc.rt_fast_gi_active = has_active_closure && use_fast_gi_scan;
   }
 
@@ -583,7 +595,10 @@ RayTraceResult RayTraceModule::render(RayTraceBuffer &rt_buffer,
   data_.trace_refraction = screen_radiance_back_tx != nullptr;
 
   for (int i = 0; i < 3; i++) {
-    result.closures[i] = trace(i, (closure_count > i), options, rt_buffer, render_view);
+    /* Entrega 4: trace only bins active in the gbuffer. Inactive bins still go through
+     * trace(..., false, ...) so their history is released and the 1x1 dummy acquired. */
+    result.closures[i] = trace(
+        i, (closure_bins_mask & (1 << i)) != 0, options, rt_buffer, render_view);
   }
 
   if (has_active_closure) {
@@ -696,6 +711,10 @@ RayTraceResultTexture RayTraceModule::trace(int closure_index,
 
   data_.thickness = options.screen_trace_thickness;
   data_.quality = 1.0f - 0.95f * options.screen_trace_quality;
+  /* Entrega 4 (GPU plan §6.3): tail knob, 0 (old files) keeps the legacy default. */
+  data_.screen_trace_max_steps = (options.screen_trace_max_steps > 0) ?
+                                     min_ii(options.screen_trace_max_steps, 512) :
+                                     255;
 
   float roughness_mask_start = options.trace_max_roughness;
   float roughness_mask_fade = 0.2f;

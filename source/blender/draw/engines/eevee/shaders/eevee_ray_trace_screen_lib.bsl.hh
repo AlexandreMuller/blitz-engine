@@ -102,7 +102,8 @@ ScreenTraceHitData raytrace_screen(ViewMatrices view,
   /* Cross at least one pixel. */
   float t = 1.001f, time = 1.001f;
   bool hit = false;
-  constexpr int max_steps = 255;
+  /* Entrega 4 (GPU plan §6.3): iteration cap is a quality/performance knob. */
+  const int max_steps = rt_data.screen_trace_max_steps;
   for (int iter = 1; !hit && (time < ssray.max_time) && (iter < max_steps); iter++) {
     float stride = 1.0f + float(iter) * rt_data.quality;
     float lod = log2(stride) * lod_fac;
