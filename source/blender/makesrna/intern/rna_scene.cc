@@ -9171,6 +9171,17 @@ static void rna_def_raytrace_eevee(BlenderRNA *brna)
   RNA_def_property_range(prop, 0.0f, 1.0f);
   RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
   RNA_def_property_update(prop, NC_SCENE | ND_RENDER_OPTIONS, nullptr);
+
+  prop = RNA_def_property(srna, "screen_trace_max_steps", PROP_INT, PROP_NONE);
+  RNA_def_property_ui_text(prop,
+                           "Screen-Trace Max Steps",
+                           "Maximum number of steps for screen space ray-tracing. Lower "
+                           "values reduce the cost of the raytracing passes at the cost of "
+                           "shorter rays");
+  RNA_def_property_range(prop, 1, 512);
+  RNA_def_property_int_default(prop, 255);
+  RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
+  RNA_def_property_update(prop, NC_SCENE | ND_RENDER_OPTIONS, nullptr);
 }
 
 static void rna_def_scene_eevee(BlenderRNA *brna)
@@ -9775,6 +9786,16 @@ static void rna_def_scene_eevee(BlenderRNA *brna)
                            "depth/normal aware bilateral filter followed by temporal accumulation "
                            "with reprojection (independent from TAA). Only available when Soft "
                            "Shadows (SPFD) is disabled");
+  RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
+  RNA_def_property_update(prop, NC_SCENE | ND_RENDER_OPTIONS, nullptr);
+
+  prop = RNA_def_property(srna, "shadow_denoise_atrous_iterations", PROP_INT, PROP_NONE);
+  RNA_def_property_ui_text(prop,
+                           "Denoise Iterations",
+                           "Number of a-trous filter iterations for shadow denoising. Fewer "
+                           "iterations are faster but leave more residual noise");
+  RNA_def_property_range(prop, 1, 4);
+  RNA_def_property_int_default(prop, 4);
   RNA_def_property_override_flag(prop, PROPOVERRIDE_OVERRIDABLE_LIBRARY);
   RNA_def_property_update(prop, NC_SCENE | ND_RENDER_OPTIONS, nullptr);
 }

@@ -182,8 +182,10 @@ static inline eClosureBits shader_closure_bits_from_flag(const GPUMaterial *gpum
   return closure_bits;
 }
 
-/* Count the number of closure bins required for the given combination of closure types. */
-static inline int to_gbuffer_bin_count(const eClosureBits closure_bits)
+/* Bitmask of the gbuffer bins (semantic slot ids) required for the given combination of
+ * closure types. Bins are not contiguous: reflection occupies bin 1 and clearcoat bin 2, so
+ * e.g. diffuse+clearcoat uses bins {0, 2}. */
+static inline int to_gbuffer_bin_mask(const eClosureBits closure_bits)
 {
   int closure_data_slots = 0;
   if (closure_bits & CLOSURE_DIFFUSE) {
@@ -211,7 +213,13 @@ static inline int to_gbuffer_bin_count(const eClosureBits closure_bits)
   if (closure_bits & CLOSURE_CLEARCOAT) {
     closure_data_slots |= (1 << 2);
   }
-  return count_bits_i(closure_data_slots);
+  return closure_data_slots;
+};
+
+/* Count the number of closure bins required for the given combination of closure types. */
+static inline int to_gbuffer_bin_count(const eClosureBits closure_bits)
+{
+  return count_bits_i(to_gbuffer_bin_mask(closure_bits));
 };
 
 static inline eMaterialGeometry to_pointcloud_material_geometry(const Object *ob)

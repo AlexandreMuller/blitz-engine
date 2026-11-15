@@ -98,7 +98,8 @@ struct [[host_shared]] RayTraceData {
   bool32_t use_backface_hit;
   /** Amount of frontface lighting to use for backface hits. */
   float backface_hit_scale;
-  uint _pad0;
+  /** Maximum steps of the main screen-space trace loop (Entrega 4, GPU plan §6.3). */
+  int screen_trace_max_steps;
   uint _pad1;
 
   struct ScreenThicknessParameters fast_gi_thickness;

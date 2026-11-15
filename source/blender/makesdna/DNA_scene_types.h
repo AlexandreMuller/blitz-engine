@@ -2817,7 +2817,10 @@ struct RaytraceEEVEE {
   /** Allow to scale radiance contribution for backface hits. */
   float backface_radiance_scale = 0.25f;
 
-  char _pad[4] = {};
+  /** Maximum steps of the main screen-space trace loop (1-512). Files saved before this
+   * field read 0 and fall back to the default of 255 at runtime (Entrega 4, GPU plan
+   * §6.3). */
+  int screen_trace_max_steps = 255;
 };
 
 /** #SceneEEVEE::flag */
@@ -2940,7 +2943,11 @@ struct SceneEEVEE {
   float light_threshold = 0.01f;
 
   float time_limit = 0.0f;
-  char _pad50[12] = {};
+  /* Shadow denoising a-trous filter iterations (1-4, upbge only). Files saved before this
+   * field read 0 and fall back to the default of 4 at runtime (Entrega 4, GPU plan §6.3).
+   * Kept at the tail to preserve the 8-byte alignment of ray_tracing_options above. */
+  int shadow_denoise_atrous_iterations = 4;
+  char _pad50[8] = {};
 };
 
 struct SceneGpencil {

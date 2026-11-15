@@ -1252,15 +1252,19 @@ gpu::Texture *DeferredLayer::render(View &render_view,
         pass.barrier(GPU_BARRIER_SHADER_IMAGE_ACCESS | GPU_BARRIER_TEXTURE_FETCH);
         inst_.manager->submit(pass, render_view);
       }
-      /* 4 a-trous iterations, ping-ponging through the scratch buffers. The first reads the
+      /* A-trous iterations, ping-ponging through the scratch buffers. The first reads the
        * temporally accumulated radiance + moments; the last writes the direct radiance
-       * buffers; the intermediate ones read and write the scratch buffers. */
-      for (int i = 0; i < 4; i++) {
+       * buffers; the intermediate ones read and write the scratch buffers. The count is a
+       * quality/performance knob (Entrega 4, GPU plan §6.3); files saved before the DNA
+       * field read 0 and keep the default of 4. */
+      int atrous_iterations = inst_.scene->eevee.shadow_denoise_atrous_iterations;
+      atrous_iterations = (atrous_iterations <= 0) ? 4 : min_ii(atrous_iterations, 4);
+      for (int i = 0; i < atrous_iterations; i++) {
         /* UPBGE GPU plan §5: one GPU timestamp scope per a-trous iteration. */
         char gpu_scope_name[32];
         SNPRINTF(gpu_scope_name, "shd.atrous%d", i);
         GPUTimestampScope _gpu_scope(gpu_scope_name);
-        const bool is_final = (i == 3);
+        const bool is_final = (i == atrous_iterations - 1);
         PassSimple &pass = shadow_denoise_atrous_ps_[i];
         pass.init();
         gpu::Shader *sh = inst_.shaders.static_shader_get(SHADOW_DENOISE_ATROUS);
