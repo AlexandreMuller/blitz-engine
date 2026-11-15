@@ -3714,6 +3714,27 @@ void DRW_game_gpu_profile_end_frame()
   GPU_timestamp_frame_end();
 }
 
+void DRW_game_gpu_profile_flush()
+{
+  BGEGpuProfileWriter &writer = bge_gpu_profile_get();
+  if (!writer.enabled) {
+    return;
+  }
+  /* Entrega 4: blocking drain of the in-flight GPU frames at engine shutdown so the
+   * telemetry file keeps full coverage (the render-ahead pipeline otherwise loses the
+   * last frames at quit). Only called from KX_KetsjiEngine::StopEngine. */
+  const bool was_enabled = DRW_gpu_context_is_enabled();
+  if (!was_enabled && !DRW_gpu_context_try_enable()) {
+    return;
+  }
+  GPU_timestamp_flush();
+  if (!was_enabled) {
+    DRW_gpu_context_disable();
+  }
+  FILE *out = writer.file ? writer.file : stdout;
+  fflush(out);
+}
+
 static void bge_gpu_profile_result_cb(void * /*userdata*/,
                                       uint64_t frame_id,
                                       uint32_t scope_count,
@@ -3746,7 +3767,22 @@ static void bge_gpu_profile_result_cb(void * /*userdata*/,
       has_total = true;
       continue;
     }
-    fprintf(out, "%s\"%s\":%.4f", first ? "" : ",", names[i], durations_ms[i]);
+    /* Entrega 4: repeated scope names (the refraction layer re-runs the deferred and
+     * raytrace passes with identical names) would collide as JSON object keys and the
+     * parser would silently keep only the last value; suffix repeats so every layer
+     * stays measurable. */
+    int occurrence = 0;
+    for (uint32_t j = 0; j < i; j++) {
+      if (valid[j] && STREQ(names[j], names[i])) {
+        occurrence++;
+      }
+    }
+    if (occurrence == 0) {
+      fprintf(out, "%s\"%s\":%.4f", first ? "" : ",", names[i], durations_ms[i]);
+    }
+    else {
+      fprintf(out, "%s\"%s#%d\":%.4f", first ? "" : ",", names[i], occurrence + 1, durations_ms[i]);
+    }
     first = false;
   }
   fprintf(out, "}");

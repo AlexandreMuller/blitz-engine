@@ -1208,6 +1208,10 @@ RAS_FrameBuffer *KX_KetsjiEngine::PostRenderScene(KX_Scene *scene,
 void KX_KetsjiEngine::StopEngine()
 {
   if (m_bInitialized) {
+    /* Entrega 4: publish the in-flight GPU profile frames before tearing down so the
+     * BGE_GPU_PROFILE telemetry keeps ~100% coverage at quit. */
+    DRW_game_gpu_profile_flush();
+
     m_converter->FinalizeAsyncLoads();
 
     while (m_scenes->GetCount() > 0) {
