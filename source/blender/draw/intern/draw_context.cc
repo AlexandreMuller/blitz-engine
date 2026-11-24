@@ -3537,7 +3537,27 @@ void DRW_bge_cam_trace_stage(const char *stage,
 
 void DRWGameWorkCounters::reset_frame()
 {
-  *this = DRWGameWorkCounters();
+  shadow_page_used = 0;
+  shadow_page_update = 0;
+  shadow_page_allocated = 0;
+  shadow_page_rendered = 0;
+  shadow_view_needed = 0;
+  shadow_stats_valid = false;
+  rt_closure_bins_active = 0;
+  rt_fast_gi_active = false;
+  lod_switches = 0;
+  lod_levels.clear();
+}
+
+void DRWGameWorkCounters::add_lod_level(const unsigned int level,
+                                       const uint64_t mesh_triangles)
+{
+  if (lod_levels.size() <= level) {
+    lod_levels.resize(level + 1);
+  }
+  LodLevelStats &stats = lod_levels[level];
+  stats.object_count++;
+  stats.mesh_triangles += mesh_triangles;
 }
 
 DRWGameWorkCounters &DRW_game_work_counters_get()
@@ -3700,6 +3720,22 @@ void DRW_game_gpu_profile_end_frame()
           wc.rt_closure_bins_active,
           wc.rt_fast_gi_active ? 1 : 0,
           wc.lod_switches);
+  fprintf(out, ",\"lod_selection\":[");
+  bool first_lod_level = true;
+  for (size_t level = 0; level < wc.lod_levels.size(); level++) {
+    const DRWGameWorkCounters::LodLevelStats &stats = wc.lod_levels[level];
+    if (stats.object_count == 0) {
+      continue;
+    }
+    fprintf(out,
+            "%s{\"level\":%u,\"objects\":%llu,\"mesh_triangles\":%llu}",
+            first_lod_level ? "" : ",",
+            static_cast<unsigned int>(level),
+            (unsigned long long)stats.object_count,
+            (unsigned long long)stats.mesh_triangles);
+    first_lod_level = false;
+  }
+  fprintf(out, "]");
   fprintf(out,
           ",\"gpu_dropped\":%llu,\"gpu_scopes_invalid\":%llu}\n",
           (unsigned long long)GPU_timestamp_dropped_frames_get(),

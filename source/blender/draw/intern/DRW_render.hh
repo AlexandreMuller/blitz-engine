@@ -11,8 +11,10 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <functional>
+#include <vector>
 
 #include "BKE_mesh_wrapper.hh"
 #include "BKE_subdiv_modifier.hh"
@@ -619,8 +621,15 @@ struct DRWGameWorkCounters {
   bool rt_fast_gi_active = false;
   /* KX_GameObject::UpdateLod. */
   int lod_switches = 0;
+  /* LOD-selected meshes before draw culling; triangles are mesh polygon counts. */
+  struct LodLevelStats {
+    uint64_t object_count = 0;
+    uint64_t mesh_triangles = 0;
+  };
+  std::vector<LodLevelStats> lod_levels;
 
   void reset_frame();
+  void add_lod_level(unsigned int level, uint64_t mesh_triangles);
 };
 
 DRWGameWorkCounters &DRW_game_work_counters_get();
