@@ -1309,7 +1309,9 @@ KX_LodManager *KX_GameObject::GetLodManager() const
   return m_lodManager;
 }
 
-void KX_GameObject::UpdateLod(const MT_Vector3 &cam_pos, float lodfactor)
+void KX_GameObject::UpdateLod(const MT_Vector3 &cam_pos,
+                              const float lodfactor,
+                              const bool profile_lod_selection)
 {
   if (!m_lodManager) {
     return;
@@ -1350,6 +1352,11 @@ void KX_GameObject::UpdateLod(const MT_Vector3 &cam_pos, float lodfactor)
   KX_LodLevel *currentLodLevel = m_lodManager->GetLevel(m_currentLodLevel);
 
   if (currentLodLevel) {
+    if (profile_lod_selection && m_lodManager->GetLevelCount() > 1) {
+      DRW_game_work_counters_get().add_lod_level(
+          currentLodLevel->GetLevel(), currentLodLevel->GetMesh()->NumPolygons());
+    }
+
     blender::bContext *C = KX_GetActiveEngine()->GetContext();
     blender::Depsgraph *depsgraph = CTX_data_expect_evaluated_depsgraph(C);
 
