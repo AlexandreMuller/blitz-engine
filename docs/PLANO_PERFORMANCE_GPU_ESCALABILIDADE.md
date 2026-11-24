@@ -1,6 +1,7 @@
 # Plano de Performance GPU, Estabilidade e Escalabilidade — EEVEE/UPBGE
 
-> **Status:** proposta técnica; nenhuma fase deste documento foi implementada ou medida.
+> **Status:** proposta técnica; início do ramo 4C com telemetria opt-in de seleção LOD. Nenhuma
+> otimização de geometria/LOD foi adotada ou validada.
 > **Continuidade:** sucede `PLANO_PERFORMANCE_RASTERIZACAO.md` e
 > `PLANO_PERFORMANCE_CAMERA_MOVEL.md`. As mudanças locais B1, B2, C1 e o denoiser de
 > sombras permanecem preservadas e aguardam validação interativa; este plano não autoriza
@@ -340,6 +341,17 @@ aprovada em sequências de 300 frames e nos testes de desoclusão/refraction.
 ### 4C. Geometria, LOD e instancing
 
 Se GBuffer/shadow raster/vertex work ou submissão de geometria forem dominantes:
+
+**Leitura inicial do profile da City Street** (3 repetições, 600 frames medidos, 120 de warm-up,
+1280×720, mesmo commit e diff local): em translação, GBuffer e prepass tiveram p50 de
+aproximadamente 0,77 ms e 0,68 ms; `eval_light` ficou em 0,56 ms e `df.shadows` em 0,15 ms.
+Isso direciona o primeiro passo para geometria/LOD, não para B2. Parado, `eval_light` foi maior
+(2,45 ms), portanto o perfil móvel guia esta escolha. `sv.deferred` é um escopo agregado e não foi
+somado aos seus subpasses.
+
+A telemetria `lod_selection` registra, por nível selecionado, objetos LOD e polígonos do mesh
+ativo. É uma contagem de seleção antes do culling, não de triângulos efetivamente desenhados pela
+câmera ou por shadow views; não substitui a medição de draw/triângulos por view.
 
 1. **LOD discreto KX já existente:** gerar níveis offline com Decimate/Subsurf estático, configurar
    distância + histerese e preservar materiais/layouts compatíveis. Nunca executar Decimate por
