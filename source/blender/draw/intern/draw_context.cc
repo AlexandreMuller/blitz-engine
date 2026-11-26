@@ -3571,8 +3571,9 @@ struct BGEGpuProfileWriter {
   bool enabled = false;
   bool header_written = false;
   FILE *file = nullptr;
-  /* 1-based, same convention as BGE_CAM_TRACE (Python bench frames are 0-based). */
+  /* 1-based render-frame id; logical benchmark ticks are correlated by monotonic timestamp. */
   uint64_t frame = 0;
+  uint64_t frame_start_ns = 0;
   /* DRW timer snapshot taken at frame begin; "cpu_frame" emits per-frame deltas. */
   DRWGameProfileStats snapshot;
 };
@@ -3619,6 +3620,7 @@ void DRW_game_gpu_profile_begin_frame()
     return;
   }
   writer.frame++;
+  writer.frame_start_ns = uint64_t(BLI_time_now_seconds() * 1.0e9);
   /* Publish older frames first: by now the previous frame was closed and submitted by the
    * (render-ahead) swap at the top of KX_KetsjiEngine::BeginFrame. */
   GPU_timestamp_poll();
@@ -3630,7 +3632,8 @@ void DRW_game_gpu_profile_begin_frame()
     const char *exe_path = BKE_appdir_program_path();
     fprintf(out,
             "{\"type\":\"header\",\"exe\":\"%s\",\"gpu\":\"%s\",\"driver\":\"%s\","
-            "\"timestamp_period_ns\":%g,\"gpu_timestamps_supported\":%d}\n",
+            "\"timestamp_period_ns\":%g,\"gpu_timestamps_supported\":%d,"
+            "\"clock_domain\":\"monotonic_ns\"}\n",
             exe_path ? BLI_path_basename(exe_path) : "?",
             GPU_platform_renderer(),
             GPU_platform_version(),
@@ -3669,7 +3672,10 @@ void DRW_game_gpu_profile_end_frame()
       "wait_timeline",
       "readback"};
 
-  fprintf(out, "{\"type\":\"cpu_frame\",\"f\":%llu", (unsigned long long)writer.frame);
+  fprintf(out,
+          "{\"type\":\"cpu_frame\",\"f\":%llu,\"frame_start_ns\":%llu",
+          (unsigned long long)writer.frame,
+          (unsigned long long)writer.frame_start_ns);
   fprintf(out, ",\"cpu_buckets_ms\":{");
   for (int i = 0; i < GPU_PERF_BUCKET_NUM; i++) {
     fprintf(out,
@@ -3683,7 +3689,8 @@ void DRW_game_gpu_profile_end_frame()
   fprintf(out,
           ",\"work\":{\"draws\":%llu,\"draws_indexed\":%llu,\"draws_indirect\":%llu,"
           "\"dispatches\":%llu,\"dispatches_indirect\":%llu,\"dispatch_groups\":%llu,"
-          "\"vertices\":%llu,\"instances\":%llu,\"nodes_submitted\":%llu}",
+          "\"vertices\":%llu,\"instances\":%llu,\"nodes_submitted\":%llu,"
+          "\"draw_prototypes\":%llu,\"draw_groups\":%llu}",
           (unsigned long long)counters[GPU_PERF_COUNTER_DRAW],
           (unsigned long long)counters[GPU_PERF_COUNTER_DRAW_INDEXED],
           (unsigned long long)counters[GPU_PERF_COUNTER_DRAW_INDIRECT],
@@ -3692,7 +3699,17 @@ void DRW_game_gpu_profile_end_frame()
           (unsigned long long)counters[GPU_PERF_COUNTER_DISPATCH_GROUPS],
           (unsigned long long)counters[GPU_PERF_COUNTER_VERTICES],
           (unsigned long long)counters[GPU_PERF_COUNTER_INSTANCES],
-          (unsigned long long)counters[GPU_PERF_COUNTER_NODES_SUBMITTED]);
+          (unsigned long long)counters[GPU_PERF_COUNTER_NODES_SUBMITTED],
+          (unsigned long long)counters[GPU_PERF_COUNTER_DRAW_PROTOTYPES],
+          (unsigned long long)counters[GPU_PERF_COUNTER_DRAW_GROUPS]);
+  fprintf(out,
+          ",\"scene_counts\":{\"kx_objects\":%lld,\"objects_iter\":%lld,"
+          "\"objects_populated\":%lld,\"camera_passes\":%d,\"samples_per_frame\":%d}",
+          (long long)cur.n_kx_objects,
+          (long long)cur.n_objects_iter,
+          (long long)cur.n_objects_populated,
+          cur.camera_passes,
+          cur.samples_per_frame);
   fprintf(out,
           ",\"drw_ms\":{\"kx_tag_loop\":%.4f,\"kx_depsgraph\":%.4f,\"kx_tag_eval\":%.4f,"
           "\"acquire\":%.4f,\"sync\":%.4f,\"draw\":%.4f,\"release\":%.4f,"

@@ -189,8 +189,8 @@ class GPUPerfBucketTimer {
  * \{ */
 
 /**
- * GPU work counters (UPBGE GPU plan §5.5), collected from the submitted render graph nodes by
- * the submission thread. Drained once per frame by the telemetry writer.
+ * GPU and draw-command work counters (UPBGE GPU plan §5.5), collected during draw-command
+ * generation and render graph submission. Drained once per frame by the telemetry writer.
  */
 enum GPUPerfCounter {
   GPU_PERF_COUNTER_DRAW = 0,
@@ -204,6 +204,10 @@ enum GPUPerfCounter {
   GPU_PERF_COUNTER_VERTICES,
   GPU_PERF_COUNTER_INSTANCES,
   GPU_PERF_COUNTER_NODES_SUBMITTED,
+  /** DrawPrototype records submitted to DrawMultiBuf command generation. */
+  GPU_PERF_COUNTER_DRAW_PROTOTYPES,
+  /** DrawGroup entries generated for DrawMultiBuf commands. */
+  GPU_PERF_COUNTER_DRAW_GROUPS,
 
   GPU_PERF_COUNTER_NUM,
 };

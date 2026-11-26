@@ -10,6 +10,7 @@
 #include "GPU_capabilities.hh"
 #include "GPU_compute.hh"
 #include "GPU_debug.hh"
+#include "GPU_timestamp.hh"
 
 #include "draw_command.hh"
 #include "draw_pass.hh"
@@ -887,6 +888,9 @@ void DrawMultiBuf::generate_commands(Vector<Header, 0> & /*headers*/,
     GPU_memory_barrier(GPU_BARRIER_SHADER_STORAGE);
     GPU_storagebuf_sync_as_indirect_buffer(command_buf_);
   }
+
+  GPU_perf_counter_add(GPU_PERF_COUNTER_DRAW_PROTOTYPES, prototype_count_);
+  GPU_perf_counter_add(GPU_PERF_COUNTER_DRAW_GROUPS, group_count_);
 
   GPU_debug_group_end();
 }
