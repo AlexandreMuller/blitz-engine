@@ -1,13 +1,43 @@
 # Plano de Performance GPU, Estabilidade e Escalabilidade — EEVEE/UPBGE
 
-> **Status:** proposta técnica; início do ramo 4C com telemetria opt-in de seleção LOD. Nenhuma
-> otimização de geometria/LOD foi adotada ou validada.
+> **Acompanhamento atualizado:** 2026-11-26. Consulte o quadro abaixo e as etiquetas nos títulos;
+> só marque uma entrega como concluída após o gate indicado e com evidência registrada em
+> `docs/RESULTADOS_PERFORMANCE_GPU.md`.
 > **Continuidade:** sucede `PLANO_PERFORMANCE_RASTERIZACAO.md` e
 > `PLANO_PERFORMANCE_CAMERA_MOVEL.md`. As mudanças locais B1, B2, C1 e o denoiser de
 > sombras permanecem preservadas e aguardam validação interativa; este plano não autoriza
 > commit, revert nem reescrita dessas mudanças.
 > **Escopo:** jogo com EEVEE/Vulkan, sem alterar o comportamento da viewport DCC fora de
 > `DRW_game_render_loop_is_active()`.
+
+### Quadro de acompanhamento
+
+Etiquetas: **CONCLUÍDA** = gate e evidência registrados; **PARCIAL** = implementação ou medição
+feita, gate ainda aberto; **EM ANDAMENTO** = trabalho ativo; **NÃO INICIADA** = sem implementação;
+**BLOQUEADA** = depende de uma entrega anterior; **CONDICIONAL** = só começa com evidência do
+gargalo.
+
+| Fase / parte | Estado | Ponto de parada ou próximo gate |
+|---|---|---|
+| 0 — 3.1 câmera | PARCIAL | Player standalone corrigido e medido; validação embedded continua aberta. |
+| 0 — 3.2 harness | CONCLUÍDA | Bench determinístico, JSONL e fingerprint entregues. |
+| 0 — 3.3 cenas | PARCIAL | City Street e proxy medidos; matriz completa de cenas pendente. |
+| 1 — 4.1 readbacks | PARCIAL | Correção e teste adicionados; executar GTests com `WITH_GTESTS=ON`. |
+| 1 — 4.2 estatísticas de sombra | CONCLUÍDA | Poll atrasado e A/B documentados; sem promessa de speedup. |
+| 2 — 5.1 componentes | CONCLUÍDA | Timestamp Vulkan e writer opt-in presentes. |
+| 2 — 5.2 requisitos | PARCIAL | Cobertura registrada; GTests e comparação de fabricante pendentes. |
+| 2 — 5.3 escopos GPU | CONCLUÍDA | Escopos EEVEE medidos; drops/inválidos zerados nas runs documentadas. |
+| 2 — 5.4 buckets CPU | CONCLUÍDA | Buckets de espera/submissão emitidos no perfil. |
+| 2 — 5.5 contadores | PARCIAL | Objetos, protótipos, grupos e draws são emitidos; multiplicidade indirect e semântica/triângulos por view ainda pendentes. |
+| 3 — 6.1 bins | CONCLUÍDA | Contagem real de bins implementada e exercitada na Entrega 4. |
+| 3 — 6.2 presets | PARCIAL | A/B eixo-a-eixo executado; qualidade visual/temporal ainda não aprova adoção geral. |
+| 3 — 6.3 controles | PARCIAL | Knobs implementados; validação de qualidade das variantes continua aberta. |
+| 4A — sombras/B2 | NÃO INICIADA | Primeiro concluir o gate interativo de B2 e perfilar cenário móvel de sombras. |
+| 4B — raytrace/denoisers | PARCIAL | Experimentos de qualidade opt-in; falta sequência visual aprovada para adotar. |
+| 4C — geometria/LOD/instancing | EM ANDAMENTO | Correlação e matriz 3× still/translate concluídas; instrumentação objetos→protótipos→grupos→draws iniciada; validação por cena, visual e contagem por view pendentes. |
+| 4D — CPU Vulkan | CONDICIONAL | Iniciar apenas se trace demonstrar CPU de record alto com GPU ociosa. |
+| 5 — qualidade adaptativa | BLOQUEADA | Aguardar aceite de otimizações estáticas da Fase 4. |
+| 6 — trabalho avançado | CONDICIONAL | Occlusion/multi-draw/hLOD dependem de gargalo residual medido. |
 
 ## 1. Ponto de partida e correção do diagnóstico
 
@@ -92,11 +122,11 @@ Um patch só entra no caminho default quando:
 4. mantém fallback de A/B durante o desenvolvimento e não altera viewport DCC indevidamente;
 5. passa nos testes de regressão EEVEE existentes e nos cenários de borda aplicáveis.
 
-## 3. Fase 0 — Harness confiável e baseline interativa
+## 3. Fase 0 — Harness confiável e baseline interativa [PARCIAL]
 
 **Prioridade:** bloqueadora. **Esforço estimado:** 1–3 dias.
 
-### 3.1 Fechar a limitação da câmera no player embutido
+### 3.1 Fechar a limitação da câmera no player embutido [PARCIAL]
 
 Não assumir que a causa já é conhecida. Instrumentar toda a cadeia, com o mesmo `frame_id`:
 
@@ -126,7 +156,7 @@ pontos distintos do trajeto são diferentes; o gatilho de câmera é 1,00 por fr
 o reset efetivamente aplicado permanece 0. Parado, todos ficam estáveis. Se o embedded continuar
 inválido, o player standalone vira a referência e a limitação permanece explicitamente aberta.
 
-### 3.2 Trajeto determinístico e configuração reproduzível
+### 3.2 Trajeto determinístico e configuração reproduzível [CONCLUÍDA]
 
 Criar um controlador de benchmark em `areatest_tmp/perf_gpu/` que:
 
@@ -141,7 +171,7 @@ Criar um controlador de benchmark em `areatest_tmp/perf_gpu/` que:
 
 Warm-up, compilação de shaders, resize e teleporte serão etiquetados e analisados separadamente.
 
-### 3.3 Matriz mínima de cenas
+### 3.3 Matriz mínima de cenas [PARCIAL]
 
 | Cena | Pergunta que responde |
 |---|---|
@@ -154,11 +184,11 @@ Warm-up, compilação de shaders, resize e teleporte serão etiquetados e analis
 | Objetos fora do frustum × visíveis porém ocluídos | frustum atual × necessidade real de occlusion |
 | LOD com transições | steady-state, popping e hitches de cache |
 
-## 4. Fase 1 — Eliminar esperas ocultas e falsos readbacks assíncronos
+## 4. Fase 1 — Eliminar esperas ocultas e falsos readbacks assíncronos [PARCIAL]
 
 **Prioridade:** imediata após a instrumentação mínima. **Esforço:** 1–3 dias.
 
-### 4.1 Corrigir `read_if_ready()` no Vulkan
+### 4.1 Corrigir `read_if_ready()` no Vulkan [PARCIAL]
 
 `VKStorageBuffer::read_if_ready()` e `VKVertexBuffer::read_if_ready()` são documentados como
 não bloqueantes, mas chamam `device.wait_for_timeline()` antes de ler
@@ -175,7 +205,7 @@ Implementação necessária:
 - adicionar teste que mantenha a GPU ocupada, faça polls sucessivos e confirme dados corretos,
   ausência de wait e ausência de cópias concorrentes.
 
-### 4.2 Remover o readback síncrono de estatísticas no jogo
+### 4.2 Remover o readback síncrono de estatísticas no jogo [CONCLUÍDA]
 
 `ShadowModule::init()` executa `statistics_buf_.current().read()` em viewport
 (`eevee_shadow.cc:672-695`), e o read Vulkan espera a timeline (`vk_buffer.cc:198-207`).
@@ -194,11 +224,11 @@ Implementação necessária:
 corretos; nenhum race/ASAN/Vulkan validation error; A/B de frametime e p95/p99 documentado. Se o
 ganho for pequeno, a correção de contrato ainda permanece válida, mas sem promessa de speedup.
 
-## 5. Fase 2 — Telemetria GPU Vulkan assíncrona e contadores de trabalho
+## 5. Fase 2 — Telemetria GPU Vulkan assíncrona e contadores de trabalho [PARCIAL]
 
 **Prioridade:** bloqueadora para otimizações maiores. **Esforço:** 4–8 dias.
 
-### 5.1 Componentes propostos
+### 5.1 Componentes propostos [CONCLUÍDA]
 
 | Componente proposto | Responsabilidade | Local provável |
 |---|---|---|
@@ -210,7 +240,7 @@ ganho for pequeno, a correção de contrato ainda permanece válida, mas sem pro
 
 Nomes são propostos, não classes existentes.
 
-### 5.2 Requisitos de implementação
+### 5.2 Requisitos de implementação [PARCIAL]
 
 - Duas queries por escopo, `timestampPeriod` e `timestampValidBits` validados.
 - Ring fixo de slots com `frame_id`, `camera_pass` e `sample`; consultar com
@@ -225,7 +255,7 @@ Nomes são propostos, não classes existentes.
 - `BGE_RENDER_PROFILE` continua produzindo o texto atual; `BGE_GPU_PROFILE=<arquivo.jsonl>`
   ativa a nova telemetria. Nenhum `GPU_finish()` no profiler.
 
-### 5.3 Escopos GPU mínimos
+### 5.3 Escopos GPU mínimos [CONCLUÍDA]
 
 - Frame total, prepass, HiZ, GBuffer, eval light, forward, volume, postFX/film e blit.
 - Shadows: tagging/setup, caster update, página/tile update e raster de shadow views.
@@ -233,14 +263,14 @@ Nomes são propostos, não classes existentes.
 - Fast GI: schedule, setup, scan, denoise e resolve.
 - Shadow Denoising: temporal e cada iteração à-trous.
 
-### 5.4 Buckets CPU separados
+### 5.4 Buckets CPU separados [CONCLUÍDA]
 
 `frame_slot_fence_wait`, `swapchain_acquire`, `KX tag`, `DRW/EEVEE sync`, `EEVEE record`,
 `render_graph build/record`, `enqueue`, `wait_for_submission`, `readback`, `present_submit` e
 `SwapBuffers`. `DRW_submission_start/end()` não será rotulado como `vkQueueSubmit`: ele apenas
 protege a região e chama `GPU_render_begin/end()`.
 
-### 5.5 Contadores de trabalho
+### 5.5 Contadores de trabalho [PARCIAL]
 
 - draws/dispatches submetidos, grupos, protótipos, batches únicos, instâncias e mudanças de estado;
 - bins de closure ativos, tiles classificados/compactados e dispatches indiretos vazios;
@@ -256,11 +286,11 @@ será usado por frame em produção.
 registrados, ranking de passes coerente com Nsight/RGP/RenderDoc e relatório parado×móvel que
 explique pelo menos 80% do delta medido.
 
-## 6. Fase 3 — Quick wins de baixo risco após o profile
+## 6. Fase 3 — Quick wins de baixo risco após o profile [PARCIAL]
 
 **Esforço:** 2–5 dias, selecionados pelos dados da Fase 2.
 
-### 3.1 Usar o número real de bins de closure
+### 3.1 Usar o número real de bins de closure [CONCLUÍDA]
 
 Há um TODO fixando três bins (`eevee_raytrace.cc:516-517,574-576`). Derivar a contagem de
 `to_gbuffer_bin_count(active_closures)` e dimensionar texturas/recursos corretamente.
@@ -271,7 +301,7 @@ Há um TODO fixando três bins (`eevee_raytrace.cc:516-517,574-576`). Derivar a 
   pois tiles vazios já são compactados.
 - A/B com um, dois e três bins, refraction e históricos persistentes.
 
-### 3.2 Presets antes de novos algoritmos
+### 3.2 Presets antes de novos algoritmos [PARCIAL]
 
 Criar uma tabela de presets por cena que apenas combine knobs existentes: Screen Trace 1:2/1:4,
 Fast GI rays/steps/resolution, Bilateral ON/OFF, shadow pool/rays/steps/resolution e B2 ON/OFF.
@@ -280,7 +310,7 @@ Alterar um eixo por vez na caracterização.
 **Atenção:** desligar Fast GI pode deslocar trabalho para screen tracing via
 `trace_max_roughness`; o custo total, não o custo isolado do passe, decide.
 
-### 3.3 Controles independentes, somente onde o profile indicar cauda
+### 3.3 Controles independentes, somente onde o profile indicar cauda [PARCIAL]
 
 - `screen_trace_max_steps`, default compatível 255, testando 64/128;
 - `shadow_denoise_atrous_iterations`, default 4; ao encurtar, o último passe precisa assumir
@@ -292,26 +322,26 @@ Alterar um eixo por vez na caracterização.
 
 Esses controles finais devem ser RNA por cena, não uma coleção permanente de variáveis de ambiente.
 
-## 7. Fase 4 — Otimizações dirigidas pelo passe dominante
+## 7. Fase 4 — Otimizações dirigidas pelo passe dominante [EM ANDAMENTO]
 
 **Esforço:** 1–3 semanas por ramo efetivamente justificado. Não executar todos por padrão.
 
-### 4A. Sombras e evolução de B2
+### 4A. Sombras e evolução de B2 [NÃO INICIADA]
 
 B2 atual apenas congela `grid_offset` em sincronizações ímpares; não há fila, aging, orçamento nem
 classificação de casters (`eevee_shadow.cc:27-75`). Sua ativação default depende do A/B interativo.
 
 Evolução incremental:
 
-1. usar `frame_id` apresentado/renderizado, não paridade global de `begin_sync()`;
-2. manter cobertura lógica do clipmap atualizada; orçar render de páginas, não aumentar o atraso do
+1. **[NÃO INICIADA]** usar `frame_id` apresentado/renderizado, não paridade global de `begin_sync()`;
+2. **[NÃO INICIADA]** manter cobertura lógica do clipmap atualizada; orçar render de páginas, não aumentar o atraso do
    grid indiscriminadamente;
-3. separar motivos `COVERAGE_NEW`, `DYNAMIC` e `LOD_QUALITY` em metadata sidecar;
-4. distinguir **dirty** de **elegível neste frame**, com filas por prioridade e aging/max_age;
-5. orçar páginas e views separadamente, com override crítico para teleporte/invalidação em massa;
-6. reutilizar stale somente quando a cobertura for compatível; tile recém-inserida não pode ler
+3. **[NÃO INICIADA]** separar motivos `COVERAGE_NEW`, `DYNAMIC` e `LOD_QUALITY` em metadata sidecar;
+4. **[NÃO INICIADA]** distinguir **dirty** de **elegível neste frame**, com filas por prioridade e aging/max_age;
+5. **[NÃO INICIADA]** orçar páginas e views separadamente, com override crítico para teleporte/invalidação em massa;
+6. **[NÃO INICIADA]** reutilizar stale somente quando a cobertura for compatível; tile recém-inserida não pode ler
    depth de outra região;
-7. prefetch na direção do movimento e fallback coarse válido quando necessário.
+7. **[NÃO INICIADA]** prefetch na direção do movimento e fallback coarse válido quando necessário.
 
 Criar `ShadowUpdateBudget` dentro do `ShadowModule`, sem renderer paralelo. A infraestrutura atual
 de páginas/cache será aproveitada; não será duplicada.
@@ -321,24 +351,24 @@ cobertura, caster dinâmico starving, popping recorrente ou fallback inválido. 
 budget estrito e zero popping não são garantidos simultaneamente em teleportes; o catch-up crítico
 é obrigatório.
 
-### 4B. Raytracing, Fast GI e denoisers
+### 4B. Raytracing, Fast GI e denoisers [PARCIAL]
 
 Se forem dominantes nos timestamps:
 
-- reduzir custo fixo por bins antes de alterar o algoritmo de marcha;
-- ajustar steps/taps com presets e validar contact reflection, misses, off-screen fallback,
+- **[PARCIAL]** reduzir custo fixo por bins antes de alterar o algoritmo de marcha;
+- **[PARCIAL]** ajustar steps/taps com presets e validar contact reflection, misses, off-screen fallback,
   leaking, halos, shimmer e ghosting;
-- compactar o Shadow Denoising customizado por tiles somente com halo correto para strides 1/2/4/8
+- **[NÃO INICIADA]** compactar o Shadow Denoising customizado por tiles somente com halo correto para strides 1/2/4/8
   e preservação do histórico;
-- não mascarar Fast GI setup apenas pela tile receptora sem considerar o footprint das regiões
+- **[NÃO INICIADA]** não mascarar Fast GI setup apenas pela tile receptora sem considerar o footprint das regiões
   fontes;
-- não propor cache cross-frame de HiZ antes de modelar jitter, câmera, refraction e objetos
+- **[NÃO INICIADA]** não propor cache cross-frame de HiZ antes de modelar jitter, câmera, refraction e objetos
   dinâmicos.
 
 **Aceite:** ganho no GPU total, não apenas deslocamento de custo para outro passe; qualidade
 aprovada em sequências de 300 frames e nos testes de desoclusão/refraction.
 
-### 4C. Geometria, LOD e instancing
+### 4C. Geometria, LOD e instancing [EM ANDAMENTO]
 
 Se GBuffer/shadow raster/vertex work ou submissão de geometria forem dominantes:
 
@@ -353,43 +383,78 @@ A telemetria `lod_selection` registra, por nível selecionado, objetos LOD e pol
 ativo. É uma contagem de seleção antes do culling, não de triângulos efetivamente desenhados pela
 câmera ou por shadow views; não substitui a medição de draw/triângulos por view.
 
-1. **LOD discreto KX já existente:** gerar níveis offline com Decimate/Subsurf estático, configurar
+**Checkpoint 4C-1 — correlação e telemetria LOD [CONCLUÍDA] (2026-11-26):** substituída a
+associação incorreta `frame lógico + 1` por timestamps monotônicos: `bench_tick.py` registra cada
+tick e o fim da fase; `BGE_GPU_PROFILE` registra o início de cada frame renderizado. O analyzer
+associa cada render ao tick mais recente anterior e exclui warm-up/finalização, sem supor relação
+1:1. Build Release e smoke real confirmaram relógios compatíveis no Windows. Na matriz de 3×
+`still` e 3× `translate` (120 warm-up + 600 medidos, 1280×720), foram correlacionados 293–295
+frames renderizados medidos por run parado e 579–582 em translação; os totais GPU disponíveis
+foram 292–294 e 578–581. Todas as runs terminaram com `gpu_dropped=0` e
+`gpu_scopes_invalid=0`. A telemetria correlacionada cobriu LOD 0 (1.316 triângulos, smoke
+controlado), LOD 1 (986) e LOD 2 (658); na translação longa, o nível 2 prevaleceu após a
+transição.
+
+Esses dados são diagnósticos, não A/B: não houve comparação pareada sem LOD, e o custo de lógica
+não é o GPU total. A associação fecha o gate de telemetria de 4C.1, mas não aprova a qualidade
+visual nem adoção dos LODs. Runs novos e sumário: `areatest_tmp/perf_gpu/out/phase4c_lod_correlated/`.
+Os JSONL antigos, sem timestamps, continuam analisáveis para CPU, mas o analyzer agora informa
+correlação GPU indisponível em vez de usar o offset incorreto.
+
+**Entrega 4C.3 — ferramenta de authoring [PARCIAL]:** `areatest_tmp/perf_gpu/lod_authoring.py`
+gera níveis LOD via operador KX/Blender existente, define distâncias e histerese, mede triângulos
+avaliados e verifica materiais, atributos, bounds e flags de visibilidade de câmera/luz/sombra.
+A ferramenta não altera o arquivo de entrada: só salva quando fornecidos `--apply` e `--output`.
+Smoke validado em mesh sintética e cópia da City Street; benchmark com frames correlacionados
+confirmou níveis 0/1/2. As capturas exploratórias `f0120`/`f0420` usam poses diferentes e não
+servem para aprovar popping/qualidade; ainda é necessária comparação visual próxima ao limiar.
+
+| Parte 4C | Estado | Gate |
+|---|---|---|
+| 4C.1 Telemetria da seleção LOD | CONCLUÍDA | Timestamps monotônicos; smoke e matriz correlacionados cobriram níveis 0/1/2 em still/translate. |
+| 4C.2 Razões de instancing e batches | CONCLUÍDA | Fixture single/shared mesh confirmou objetos→protótipos→grupos→draws; contadores são agregados por frame, sem atribuição por view. |
+| 4C.3 Authoring e validação de LOD | PARCIAL | Ferramenta e benchmark correlacionado validados; falta comparar transições na mesma pose e aprovar visualmente. |
+| 4C.4 Triângulos de câmera e shadow views | NÃO INICIADA | Contagem confiável por view, sem inferir visibilidade de draws indiretos. |
+
+1. **[PARCIAL] LOD discreto KX já existente:** gerar níveis offline com Decimate/Subsurf estático, configurar
    distância + histerese e preservar materiais/layouts compatíveis. Nunca executar Decimate por
    frame. Estender `KX_LodManager` apenas com telemetria e depuração; não criar outro sistema LOD.
-2. **Instancing já existente:** medir razão objetos→protótipos→grupos→draws. Corrigir primeiro
+2. **[PARCIAL] Instancing já existente:** medir razão objetos→protótipos→grupos→draws. Corrigir primeiro
    evaluated meshes/batches divergentes, custom vertex ranges e estados incompatíveis. Para
    repetição grande, avaliar duplis/collection instances/Geometry Nodes que preservem batches.
-3. **Ferramenta de authoring:** script para gerar LODs, validar bounds, materiais, light/shadow
+   A fixture single/shared mesh confirmou a contagem; multiplicidade de indirect commands e
+   associação por camera/shadow view continuam abertas.
+3. **[PARCIAL] Ferramenta de authoring:** script para gerar LODs, validar bounds, materiais, light/shadow
    flags e estimar triângulos por nível; cache de transição deve ser aquecido no benchmark.
-4. **Sombras incluídas:** contar triângulos de câmera e de cada shadow view; reduzir só a câmera
+4. **[NÃO INICIADA] Sombras incluídas:** contar triângulos de câmera e de cada shadow view; reduzir só a câmera
    não caracteriza o ganho total.
 
-**Aceite:** melhoria ≥25% no estresse-alvo, sem regressão >5% em 1×, sem popping/hitches
+**[PENDENTE] Aceite:** melhoria ≥25% no estresse-alvo, sem regressão >5% em 1×, sem popping/hitches
 recorrentes e sem perda de batching que anule o ganho de triângulos.
 
-### 4D. CPU de submissão/Vulkan
+### 4D. CPU de submissão/Vulkan [CONDICIONAL]
 
 Somente se record CPU estiver alto com GPU ociosa:
 
-- reduzir submissões/estados/flushes identificados pelo trace;
-- investigar agregação multi-draw depois de resolver Batch/VAO por grupo — trocar `count=1` por
+- **[CONDICIONAL]** reduzir submissões/estados/flushes identificados pelo trace;
+- **[CONDICIONAL]** investigar agregação multi-draw depois de resolver Batch/VAO por grupo — trocar `count=1` por
   `count>1` não é suficiente;
-- não aumentar profundidade de render-ahead para esconder GPU saturada, pois isso adiciona
+- **[CONDICIONAL]** não aumentar profundidade de render-ahead para esconder GPU saturada, pois isso adiciona
   latência e não reduz trabalho.
 
-## 8. Fase 5 — Qualidade adaptativa e orçamento de frame
+## 8. Fase 5 — Qualidade adaptativa e orçamento de frame [BLOQUEADA]
 
 **Prioridade:** somente após otimizações estáticas. **Esforço:** 3–7 dias.
 
 Criar presets `Performance`, `Balanced` e `Quality` centralizados por cena. Um futuro
 `BGERenderQualityController` poderá consumir GPU total e frametime em EMA/janela, com:
 
-- target 60/120 fps, margem explícita e histerese;
-- cooldown e passos discretos, sem oscilar resolução a cada frame;
-- limites mínimos/máximos para raytrace, Fast GI, sombras e LOD;
-- tratamento especial de resize, teleporte, loading e compilação de shaders;
-- contabilização do custo de reset temporal/realocação ao trocar resolução;
-- opt-out completo e override manual por cena.
+- **[PLANEJADO]** target 60/120 fps, margem explícita e histerese;
+- **[PLANEJADO]** cooldown e passos discretos, sem oscilar resolução a cada frame;
+- **[PLANEJADO]** limites mínimos/máximos para raytrace, Fast GI, sombras e LOD;
+- **[PLANEJADO]** tratamento especial de resize, teleporte, loading e compilação de shaders;
+- **[PLANEJADO]** contabilização do custo de reset temporal/realocação ao trocar resolução;
+- **[PLANEJADO]** opt-out completo e override manual por cena.
 
 Dynamic resolution é o último recurso, não a primeira solução: mudanças frequentes podem destruir
 históricos e introduzir realocações, apagando o benefício.
@@ -397,17 +462,17 @@ históricos e introduzir realocações, apagando o benefício.
 **Aceite:** p95 dentro do orçamento escolhido, sem oscilação visível, sem aumento de input lag e
 sem resets contínuos de TAA.
 
-## 9. Fase 6 — Trabalho avançado, condicionado a evidência
+## 9. Fase 6 — Trabalho avançado, condicionado a evidência [CONDICIONAL]
 
 Não faz parte da primeira entrega:
 
-- **Occlusion GPU em duas fases:** somente se houver muito trabalho em objetos frustum-visíveis
+- **[CONDICIONAL] Occlusion GPU em duas fases:** somente se houver muito trabalho em objetos frustum-visíveis
   mas ocluídos após LOD/instancing. Exige HiZ histórico explícito, late pass para desoclusão e
   política conservadora para transparentes/dinâmicos. `HiZBuffer::back` atual não é histórico de
   frame pronto para esse uso.
-- **hLOD/meshlets/mesh shaders:** ausentes no caminho atual e fora de uma otimização incremental.
-- **Reescrita do draw manager, depsgraph ou renderer:** fora do escopo.
-- **Threading da lógica:** sem justificativa, pois lógica/física são pequenas na baseline.
+- **[NÃO INICIADA] hLOD/meshlets/mesh shaders:** ausentes no caminho atual e fora de uma otimização incremental.
+- **[FORA DE ESCOPO] Reescrita do draw manager, depsgraph ou renderer.**
+- **[CONDICIONAL] Threading da lógica:** sem justificativa, pois lógica/física são pequenas na baseline.
 
 ## 10. Validação obrigatória
 
