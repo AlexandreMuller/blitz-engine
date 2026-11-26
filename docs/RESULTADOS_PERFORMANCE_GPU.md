@@ -4,6 +4,92 @@
 > Artefatos locais (JSONL brutos, traces, perfis, screenshots, fingerprints) ficam em
 > `areatest_tmp/perf_gpu/out/`.
 
+## Checkpoint Fase 4C — Authoring LOD e telemetria [PARCIAL] (2026-11-24)
+
+**Escopo:** ferramenta local `areatest_tmp/perf_gpu/lod_authoring.py`, validação do campo
+`lod_selection` com LOD ativo e correção do fechamento repetido do JSONL em `bench_tick.py`.
+
+**Cena controlada:** cópia da City Street (`city_street_bench.blend`) com o objeto `Cube`.
+Mesh avaliada base: 1.316 triângulos; níveis gerados com target final 0,5, distâncias 25/50 e
+histerese 10%: 986 e 658 triângulos. O relatório do authoring não encontrou diferenças de
+materiais, atributos, bounds ou flags de visibilidade.
+
+**Validação de execução:** 3 repetições de 600 frames medidos + 120 warm-up em `still` e
+`translate`, 1280×720, vsync OFF, Blender player Release, NVIDIA GeForce RTX 3060 / driver
+621.24. Os 6 JSONL do controlador terminaram sem registros `error`; `gpu_dropped=0` e
+`gpu_scopes_invalid=0`. Em amostras `cpu_frame`, `lod_selection` reportou nível 1
+(`objects=1`, `mesh_triangles=986`) parado e nível 2 (`objects=1`, `mesh_triangles=658`) durante
+translação.
+
+**Limitação bloqueante:** o controlador encerrou após 600 frames de lógica, mas o profiler
+registrou 256–558 frames renderizados por run. Apenas 136–215/600 amostras `still` e 438–466/600
+amostras `translate` puderam ser correlacionadas pelo analyzer atual. O frametime de lógica e o
+GPU total também divergiram, portanto os números não são um A/B válido nem evidência de ganho.
+Não adotar LOD nem declarar aceite de performance com esses dados.
+
+**Ponto de parada em 2026-11-24:** alinhar explicitamente frame lógico, câmera efetivamente
+renderizada e `frame_id` GPU no harness; esse bloqueio foi fechado no checkpoint de 2026-11-26.
+Os dados brutos desse primeiro lote permanecem em `areatest_tmp/perf_gpu/out/phase4c_lod/`.
+
+## Checkpoint Fase 4C — Correlação por timestamp e matriz LOD [PARCIAL] (2026-11-26)
+
+**Correção do harness:** removida a hipótese de que o frame de lógica `f` corresponde ao frame
+GPU `f+1`. `bench_tick.py` grava `timestamp_ns` por tick e um evento `phase_end`;
+`draw_context.cc` grava `frame_start_ns` monotônico por frame renderizado; ambos identificam
+`clock_domain=monotonic_ns`. `analyze_bench.py` associa cada frame de render ao tick lógico mais
+recente anterior, restringe os percentis GPU à fase medida e exclui frames posteriores ao marcador
+de término. Arquivos antigos sem esses timestamps continuam sendo lidos, mas não recebem métricas
+GPU correlacionadas.
+
+**Validação:** build Release `blenderplayer` concluído com
+`cmake --build K:\Blitz-Engine\build_windows_Release_x64_vc17_Release --target blenderplayer --config Release -- /m:4`.
+Smoke real em player e fixture sintética confirmaram a associação muitos-para-um e a filtragem de
+fase. Na cópia controlada da City Street com LODs, foram feitas 3 repetições por trajetória,
+1280×720, vsync OFF, 120 ticks de warm-up e 600 medidos:
+
+| Trajeto | Frames de perfil medidos/correlacionados por run | Amostras `gpu_total_ms` por run | p50 GPU total (ms) | p95 GPU total (ms) |
+|---|---:|---:|---:|---:|
+| still | 293–295 | 292–294 | 16,75–16,88 | 18,43–18,84 |
+| translate | 579–582 | 578–581 | 8,35–8,46 | 10,40–10,51 |
+
+Todas as seis runs terminaram com `gpu_dropped=0` e `gpu_scopes_invalid=0`. LOD selecionado nos
+frames renderizados correlacionados: `still` manteve nível 1 (986 triângulos); `translate`
+observou níveis 1 (986) e 2 (658). Um smoke separado, com câmera a 10 m do objeto, registrou
+nível 0 (1.316 triângulos) em todos os frames medidos correlacionados. Os p50/p95 acima descrevem
+trajetos diferentes e **não são um A/B nem evidência de ganho**; não houve run pareado sem LOD.
+Esta matriz foi coletada antes da instrumentação adicional de 4C.2; não compare seus tempos
+diretamente com os smokes posteriores de contadores.
+
+**Qualidade visual ainda pendente:** capturas exploratórias em
+`areatest_tmp/perf_gpu/out/phase4c_lod_visual/` mostram posições distintas da câmera e não
+isolam a mudança de geometria. Fazer pares de imagens perto do limiar na mesma trajetória e
+aprovar popping/hitches antes de adotar LOD. A instrumentação objetos→protótipos→grupos→draws
+está concluída para contagem global e smoke estrutural; contagens por câmera/shadow view seguem
+pendentes no gate 4C.4.
+
+**Instrumentação 4C.2 [CONCLUÍDA]:** `BGE_GPU_PROFILE` agora inclui `scene_counts` (objetos KX,
+objetos iterados/populados, passes de câmera e samples), `work.draw_prototypes` (registros
+`DrawPrototype` gerados), `work.draw_groups` (`DrawGroup` gerados) e os contadores Vulkan de draw
+e instâncias. `analyze_bench.py` agrega médias apenas nos frames renderizados correlacionados à
+fase measure.
+
+O smoke de City Street LOD (120 warm-up + 120 ticks medidos) produziu 102 frames renderizados
+correlacionados. Médias por frame correlacionado: `scene_counts.kx_objects=399`,
+`objects_iter=403`, `objects_populated=403`; `work.draw_prototypes=2513`,
+`draw_groups=2513`, `draws=26`, `draws_indexed=2`, `draws_indirect=2513` e `instances=222`.
+
+**Fixture de repetição conhecida:** com uma única mesh compartilhada, controle de 2 objetos
+reportou 8 protótipos, 8 grupos e 8 draws indirect médios; a mesma cena com 64 cópias vinculadas
+(66 objetos no total) reportou 392 protótipos, 8 grupos e 8 draws indirect. Isso confirma que os
+contadores distinguem o aumento de protótipos da agregação em grupos/draws no mesmo frame. O
+counter Vulkan `instances` ficou em 189 nos dois casos; ele não representa a multiplicidade
+embutida nos comandos indirect e não deve ser usado como contagem de instâncias dessa via.
+
+4C.2 fecha a instrumentação e o smoke estrutural, não um ganho de performance. Os valores são
+agregados entre câmera/shadow views e não localizam onde cada grupo foi gerado; essa atribuição e
+triângulos por view permanecem no gate 4C.4. Evidências: `areatest_tmp/perf_gpu/out/phase4c_instancing_smoke/`
+e `areatest_tmp/perf_gpu/out/phase4c_instancing_fixture/`.
+
 ## Entrega 4 — Fechamento de limitações da Entrega 3 + Fase 3: Bins de closure, presets e controles independentes (2026-11-15)
 
 **Escopo executado:** fechamento das limitações registradas na Entrega 3 (cobertura no quit e
