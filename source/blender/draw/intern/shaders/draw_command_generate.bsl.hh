@@ -26,12 +26,15 @@ struct GenerateCommand {
   [[storage(2, read)]] DrawPrototype (&prototype_buf)[];
   [[storage(3, write)]] DrawCommand (&command_buf)[];
   [[storage(DRW_RESOURCE_ID_SLOT, write)]] uint (&resource_id_buf)[];
+  [[storage(DRW_RESOURCE_ID_SLOT + 1, read_write)]] uint (&view_work_buf)[];
 
   [[push_constant]] int prototype_len;
   [[push_constant]] int visibility_word_per_draw;
   [[push_constant]] int view_shift;
   [[push_constant]] int view_len;
   [[push_constant]] bool use_custom_ids;
+  [[push_constant]] bool view_work_enabled;
+  [[push_constant]] int view_work_base;
 
   /* This is only called by the last thread executed over the group's prototype draws. */
   void write_draw_call(DrawGroup group, uint group_id)
@@ -125,8 +128,18 @@ void command_gen([[resource_table]] GenerateCommand &srt,
     }
   }
   bool is_visible = visible_instance_len > 0;
-
   DrawGroup group = srt.group_buf[group_id];
+
+  if (srt.visibility_word_per_draw == 0 && is_visible && srt.view_work_enabled) {
+    uint result_index = uint(srt.view_work_base) * 2u;
+    if (group.triangle_count_valid != 0u) {
+      atomicAdd(srt.view_work_buf[result_index],
+                group.triangle_count_per_instance * proto.instance_len);
+    }
+    else {
+      atomicAdd(srt.view_work_buf[result_index + 1u], 1u);
+    }
+  }
 
   if (!is_visible) {
     /* Skip the draw but still count towards the completion. */
@@ -164,6 +177,16 @@ void command_gen([[resource_table]] GenerateCommand &srt,
       uint view_index = uint(i) * 32u;
       while (word != 0u) {
         if ((word & 1u) != 0u) {
+          if (srt.view_work_enabled) {
+            uint result_index = (uint(srt.view_work_base) + view_index) * 2u;
+            if (group.triangle_count_valid != 0u) {
+              atomicAdd(srt.view_work_buf[result_index],
+                        group.triangle_count_per_instance * proto.instance_len);
+            }
+            else {
+              atomicAdd(srt.view_work_buf[result_index + 1u], 1u);
+            }
+          }
           if (srt.use_custom_ids) {
             srt.resource_id_buf[dst_index * 2] = view_index | (resource_id << srt.view_shift);
             srt.resource_id_buf[dst_index * 2 + 1] = proto.custom_id;

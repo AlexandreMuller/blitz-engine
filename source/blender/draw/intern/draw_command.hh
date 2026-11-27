@@ -42,6 +42,9 @@ class DrawMultiBuf;
  * Return a persistent #Batch for procedural \a primitive draws.
  */
 Batch *procedural_batch_get(GPUPrimType primitive);
+bool draw_command_triangle_count_per_instance(GPUPrimType primitive_type,
+                                              uint element_count,
+                                              uint &r_triangle_count);
 
 /* -------------------------------------------------------------------- */
 /** \name Recording State

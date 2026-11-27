@@ -50,6 +50,8 @@ struct [[host_shared]] DrawGroup {
   int vertex_first;
   /* Set to -1 if not an indexed draw. */
   int base_index;
+  uint triangle_count_per_instance;
+  uint triangle_count_valid;
 
   /** Atomic counters used during command sorting. GPU only. Reset on CPU. */
 
@@ -58,6 +60,8 @@ struct [[host_shared]] DrawGroup {
   /* Counts only visible instance (counting multi-view). Used to issue the draw-calls. */
   uint front_facing_counter;
   uint back_facing_counter;
+  uint _padding_0;
+  uint _padding_1;
 
   /* CPU specific region of the struct. Should be kept constant after recording.
    * Can be used by GPU but needs to be initialized by GPU before usage. */

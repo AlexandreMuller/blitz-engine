@@ -263,6 +263,11 @@ class StorageCommon : public DataBuffer<T, len, false>, NonMovable, NonCopyable 
     return GPU_storagebuf_read_if_ready(ssbo_, this->data_);
   }
 
+  bool read_if_ready_once()
+  {
+    return GPU_storagebuf_read_if_ready_once(ssbo_, this->data_);
+  }
+
   operator gpu::StorageBuf *() const
   {
     return ssbo_;

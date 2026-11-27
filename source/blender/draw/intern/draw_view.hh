@@ -175,6 +175,11 @@ class View {
     return screen_pixel_radius(wininv(view_id), is_persp(view_id), extent);
   }
 
+  int view_len() const
+  {
+    return view_len_;
+  }
+
   int visibility_word_per_draw() const
   {
     return (view_len_ == 1) ? 0 : divide_ceil_u(view_len_, 32);

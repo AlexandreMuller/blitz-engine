@@ -76,6 +76,10 @@ void ShadingView::render()
   if (!is_enabled_) {
     return;
   }
+  DRWGameViewWorkScope view_work_scope(
+      DRWGameViewWorkPhase::Camera,
+      1,
+      inst_.camera.is_panoramic() ? uint32_t(face_id_) : 0u);
 
   /* UPBGE Fase 3: per-stage breakdown of this view's render. */
   DRWGameProfileStats &profile = DRW_game_profile_get();

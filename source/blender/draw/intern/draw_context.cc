@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 
 #include "CLG_log.h"
 
@@ -94,6 +95,9 @@
 #include "WM_toolsystem.hh"
 
 #include "DRW_render.hh"
+#include "DRW_gpu_wrapper.hh"
+
+#include <array>
 
 #include "../blenkernel/intern/mesh_gpu_cache.hh"                     // UPBGE
 #include "DNA_key_types.h"                                            // UPBGE
@@ -3535,6 +3539,221 @@ void DRW_bge_cam_trace_stage(const char *stage,
  * ("gpu_frame", published a few frames later, never blocking). Enabled with
  * BGE_GPU_PROFILE=<file.jsonl>; a boolean-like value writes to stdout. */
 
+namespace {
+
+constexpr uint32_t DRW_VIEW_WORK_MAX_RECORDS = 4096;
+constexpr uint32_t DRW_VIEW_WORK_MAX_VIEWS_PER_SCOPE = 64;
+constexpr uint32_t DRW_VIEW_WORK_BUFFER_COUNT = 5;
+
+struct DRWViewWorkEntry {
+  DRWGameViewWorkPhase phase;
+  uint32_t invocation;
+  uint32_t view_index;
+  uint32_t view_capacity;
+  uint64_t direct_triangles = 0;
+  bool direct_valid = true;
+};
+
+struct DRWViewWorkReadbackSlot {
+  std::unique_ptr<draw::StorageArrayBuffer<uint32_t, DRW_VIEW_WORK_MAX_RECORDS * 2, true>>
+      buffer;
+  std::vector<DRWViewWorkEntry> entries;
+  uint64_t source_frame = 0;
+  bool pending = false;
+  bool ready = false;
+};
+
+struct DRWViewWorkActiveScope {
+  DRWGameViewWorkContext context;
+  DRWGameViewWorkPhase phase = DRWGameViewWorkPhase::Camera;
+  uint32_t invocation = 0;
+};
+
+std::array<DRWViewWorkReadbackSlot, DRW_VIEW_WORK_BUFFER_COUNT> drw_view_work_slots;
+std::vector<DRWViewWorkActiveScope> drw_view_work_scope_stack;
+DRWViewWorkActiveScope drw_view_work_active_scope;
+int drw_view_work_active_slot = -1;
+int drw_view_work_next_slot = 0;
+uint32_t drw_view_work_camera_invocation = 0;
+uint32_t drw_view_work_shadow_invocation = 0;
+
+void drw_view_work_consume_slot(DRWViewWorkReadbackSlot &slot,
+                                DRWGameWorkCounters &work_counters)
+{
+  for (uint32_t i = 0; i < slot.entries.size(); i++) {
+    const DRWViewWorkEntry &entry = slot.entries[i];
+    const uint32_t triangle_count = (*slot.buffer)[i * 2];
+    const uint32_t invalid_count = (*slot.buffer)[i * 2 + 1];
+    DRWGameWorkCounters::ViewWorkResult result;
+    result.source_frame = slot.source_frame;
+    result.invocation = entry.invocation;
+    result.view_index = entry.view_index;
+    result.view_capacity = entry.view_capacity;
+    result.triangles_submitted = entry.direct_triangles + triangle_count;
+    result.valid = entry.direct_valid && invalid_count == 0;
+    result.shadow = entry.phase == DRWGameViewWorkPhase::Shadow;
+    work_counters.view_work_results.push_back(result);
+  }
+  slot.entries.clear();
+  slot.pending = false;
+  slot.ready = false;
+}
+
+void drw_view_work_begin_frame(const uint64_t frame)
+{
+  DRWGameWorkCounters &work_counters = DRW_game_work_counters_get();
+  for (DRWViewWorkReadbackSlot &slot : drw_view_work_slots) {
+    if (!slot.pending) {
+      continue;
+    }
+    if (slot.ready || slot.buffer->read_if_ready_once()) {
+      drw_view_work_consume_slot(slot, work_counters);
+    }
+  }
+
+  drw_view_work_active_slot = -1;
+  for (uint32_t i = 0; i < DRW_VIEW_WORK_BUFFER_COUNT; i++) {
+    const int slot_index = (drw_view_work_next_slot + i) % DRW_VIEW_WORK_BUFFER_COUNT;
+    DRWViewWorkReadbackSlot &slot = drw_view_work_slots[slot_index];
+    if (!slot.pending) {
+      drw_view_work_active_slot = slot_index;
+      drw_view_work_next_slot = (slot_index + 1) % DRW_VIEW_WORK_BUFFER_COUNT;
+      slot.source_frame = frame;
+      slot.entries.clear();
+      if (!slot.buffer) {
+        slot.buffer = std::make_unique<
+            draw::StorageArrayBuffer<uint32_t, DRW_VIEW_WORK_MAX_RECORDS * 2, true>>(
+            "BGEViewWork");
+      }
+      slot.buffer->clear_to_zero();
+      break;
+    }
+  }
+
+  drw_view_work_scope_stack.clear();
+  drw_view_work_active_scope = {};
+  drw_view_work_camera_invocation = 0;
+  drw_view_work_shadow_invocation = 0;
+}
+
+void drw_view_work_end_frame()
+{
+  if (drw_view_work_active_slot < 0) {
+    return;
+  }
+  DRWViewWorkReadbackSlot &slot = drw_view_work_slots[drw_view_work_active_slot];
+  if (!slot.entries.empty()) {
+    slot.ready = slot.buffer->read_if_ready_once();
+    slot.pending = true;
+  }
+  drw_view_work_active_slot = -1;
+}
+
+void drw_view_work_write_results(
+    FILE *out,
+    const uint64_t publication_frame,
+    const std::vector<DRWGameWorkCounters::ViewWorkResult> &results,
+    const size_t first_result = 0)
+{
+  for (size_t i = first_result; i < results.size(); i++) {
+    const DRWGameWorkCounters::ViewWorkResult &result = results[i];
+    fprintf(out,
+            "{\"type\":\"view_work\",\"frame\":%llu,\"source_frame\":%llu,"
+            "\"phase\":\"%s\",\"invocation\":%u,\"view_index\":%u,"
+            "\"view_capacity\":%u,\"triangles_submitted\":%llu,\"valid\":%d}\n",
+            (unsigned long long)publication_frame,
+            (unsigned long long)result.source_frame,
+            result.shadow ? "shadow" : "camera",
+            result.invocation,
+            result.view_index,
+            result.view_capacity,
+            (unsigned long long)result.triangles_submitted,
+            result.valid ? 1 : 0);
+  }
+}
+
+}  // namespace
+
+DRWGameViewWorkScope::DRWGameViewWorkScope(const DRWGameViewWorkPhase phase,
+                                           const uint32_t view_count,
+                                           const uint32_t logical_view_index_base)
+{
+  if (!DRW_game_gpu_profile_is_enabled()) {
+    return;
+  }
+
+  drw_view_work_scope_stack.push_back(drw_view_work_active_scope);
+  drw_view_work_active_scope = {};
+  pushed_ = true;
+
+  if (drw_view_work_active_slot < 0 || view_count == 0 ||
+      view_count > DRW_VIEW_WORK_MAX_VIEWS_PER_SCOPE)
+  {
+    DRW_game_work_counters_get().view_work_dropped++;
+    return;
+  }
+
+  DRWViewWorkReadbackSlot &slot = drw_view_work_slots[drw_view_work_active_slot];
+  if (slot.entries.size() + view_count > DRW_VIEW_WORK_MAX_RECORDS) {
+    DRW_game_work_counters_get().view_work_dropped++;
+    return;
+  }
+
+  const uint32_t invocation = phase == DRWGameViewWorkPhase::Camera ?
+                                  drw_view_work_camera_invocation++ :
+                                  drw_view_work_shadow_invocation++;
+  const uint32_t result_base = slot.entries.size();
+  for (uint32_t view_index = 0; view_index < view_count; view_index++) {
+    slot.entries.push_back(
+        {phase, invocation, logical_view_index_base + view_index, view_count});
+  }
+  drw_view_work_active_scope.context = {result_base, view_count, true};
+  drw_view_work_active_scope.phase = phase;
+  drw_view_work_active_scope.invocation = invocation;
+}
+
+DRWGameViewWorkScope::~DRWGameViewWorkScope()
+{
+  if (!pushed_) {
+    return;
+  }
+  BLI_assert(!drw_view_work_scope_stack.empty());
+  drw_view_work_active_scope = drw_view_work_scope_stack.back();
+  drw_view_work_scope_stack.pop_back();
+}
+
+DRWGameViewWorkContext DRW_game_view_work_context_get()
+{
+  return drw_view_work_active_scope.context;
+}
+
+gpu::StorageBuf *DRW_game_view_work_buffer_get()
+{
+  if (!drw_view_work_active_scope.context.enabled || drw_view_work_active_slot < 0) {
+    return nullptr;
+  }
+  return *drw_view_work_slots[drw_view_work_active_slot].buffer;
+}
+
+void DRW_game_view_work_add_direct_triangles(const uint64_t triangles, const bool valid)
+{
+  const DRWGameViewWorkContext &context = drw_view_work_active_scope.context;
+  if (!context.enabled || drw_view_work_active_slot < 0) {
+    return;
+  }
+  DRWViewWorkReadbackSlot &slot = drw_view_work_slots[drw_view_work_active_slot];
+  for (uint32_t i = 0; i < context.view_count; i++) {
+    DRWViewWorkEntry &entry = slot.entries[context.result_base + i];
+    if (context.view_count > 1 && triangles > 0) {
+      entry.direct_valid = false;
+    }
+    else {
+      entry.direct_triangles += triangles;
+    }
+    entry.direct_valid &= valid;
+  }
+}
+
 void DRWGameWorkCounters::reset_frame()
 {
   shadow_page_used = 0;
@@ -3547,6 +3766,8 @@ void DRWGameWorkCounters::reset_frame()
   rt_fast_gi_active = false;
   lod_switches = 0;
   lod_levels.clear();
+  view_work_dropped = 0;
+  view_work_results.clear();
 }
 
 void DRWGameWorkCounters::add_lod_level(const unsigned int level,
@@ -3643,6 +3864,7 @@ void DRW_game_gpu_profile_begin_frame()
   }
   writer.snapshot = DRW_game_profile_get();
   DRW_game_work_counters_get().reset_frame();
+  drw_view_work_begin_frame(writer.frame);
 }
 
 void DRW_game_gpu_profile_end_frame()
@@ -3653,6 +3875,7 @@ void DRW_game_gpu_profile_end_frame()
   }
   FILE *out = writer.file ? writer.file : stdout;
   DRWGameProfileStats &cur = DRW_game_profile_get();
+  drw_view_work_end_frame();
 
   uint64_t bucket_ns[GPU_PERF_BUCKET_NUM];
   uint64_t bucket_count[GPU_PERF_BUCKET_NUM];
@@ -3660,6 +3883,14 @@ void DRW_game_gpu_profile_end_frame()
   uint64_t counters[GPU_PERF_COUNTER_NUM];
   GPU_perf_counter_drain(counters);
   const DRWGameWorkCounters &wc = DRW_game_work_counters_get();
+
+  drw_view_work_write_results(out, writer.frame, wc.view_work_results);
+  if (wc.view_work_dropped > 0) {
+    fprintf(out,
+            "{\"type\":\"view_work_status\",\"frame\":%llu,\"dropped_scopes\":%llu}\n",
+            (unsigned long long)writer.frame,
+            (unsigned long long)wc.view_work_dropped);
+  }
 
   static const char *bucket_names[GPU_PERF_BUCKET_NUM] = {
       "frame_slot_fence_wait",
@@ -3780,11 +4011,38 @@ void DRW_game_gpu_profile_flush()
   if (!was_enabled && !DRW_gpu_context_try_enable()) {
     return;
   }
+  drw_view_work_end_frame();
   GPU_timestamp_flush();
+  GPU_finish();
+  DRWGameWorkCounters &work_counters = DRW_game_work_counters_get();
+  const size_t first_result = work_counters.view_work_results.size();
+  uint64_t dropped_readbacks = 0;
+  for (DRWViewWorkReadbackSlot &slot : drw_view_work_slots) {
+    if (!slot.pending) {
+      continue;
+    }
+    if (!slot.ready) {
+      slot.ready = slot.buffer->read_if_ready();
+    }
+    if (slot.ready) {
+      drw_view_work_consume_slot(slot, work_counters);
+    }
+    else {
+      dropped_readbacks++;
+    }
+  }
   if (!was_enabled) {
     DRW_gpu_context_disable();
   }
   FILE *out = writer.file ? writer.file : stdout;
+  drw_view_work_write_results(
+      out, writer.frame, work_counters.view_work_results, first_result);
+  if (dropped_readbacks > 0) {
+    fprintf(out,
+            "{\"type\":\"view_work_status\",\"frame\":%llu,\"dropped_readbacks\":%llu}\n",
+            (unsigned long long)writer.frame,
+            (unsigned long long)dropped_readbacks);
+  }
   fflush(out);
 }
 

@@ -13,6 +13,8 @@
 #include "GPU_timestamp.hh"
 
 #include "draw_command.hh"
+
+#include "DRW_render.hh"
 #include "draw_pass.hh"
 #include "draw_shader.hh"
 #include "draw_view.hh"
@@ -740,6 +742,39 @@ std::string TextureCopy::serialize() const
 /** \name Commands buffers binding / command / resource ID generation
  * \{ */
 
+bool draw_command_triangle_count_per_instance(const GPUPrimType primitive_type,
+                                              const uint element_count,
+                                              uint &r_triangle_count)
+{
+  r_triangle_count = 0;
+  switch (primitive_type) {
+    case GPU_PRIM_TRIS:
+      if (element_count % 3 != 0) {
+        return false;
+      }
+      r_triangle_count = element_count / 3;
+      return true;
+    case GPU_PRIM_TRIS_ADJ:
+      if (element_count % 6 != 0) {
+        return false;
+      }
+      r_triangle_count = element_count / 6;
+      return true;
+    case GPU_PRIM_POINTS:
+    case GPU_PRIM_LINES:
+    case GPU_PRIM_LINE_STRIP:
+    case GPU_PRIM_LINE_LOOP:
+    case GPU_PRIM_LINES_ADJ:
+    case GPU_PRIM_LINE_STRIP_ADJ:
+      return true;
+    case GPU_PRIM_TRI_STRIP:
+    case GPU_PRIM_TRI_FAN:
+    case GPU_PRIM_NONE:
+      return false;
+  }
+  return false;
+}
+
 void DrawCommandBuf::finalize_commands(Vector<Header, 0> &headers,
                                        Vector<Undetermined, 0> &commands,
                                        SubPassVector &sub_passes,
@@ -773,6 +808,14 @@ void DrawCommandBuf::finalize_commands(Vector<Header, 0> &headers,
 
     if (cmd.vertex_len == uint(-1)) {
       cmd.vertex_len = batch_vert_len;
+    }
+
+    if (DRW_game_view_work_context_get().enabled) {
+      uint triangle_count = 0;
+      const bool triangles_valid = draw_command_triangle_count_per_instance(
+          cmd.batch->gpu_batch()->prim_type, uint(cmd.vertex_len), triangle_count);
+      DRW_game_view_work_add_direct_triangles(uint64_t(triangle_count) * cmd.instance_len,
+                                              triangles_valid);
     }
 
     /* NOTE: Only do this if a handle is present. If a draw-call is using instancing with null
@@ -858,6 +901,15 @@ void DrawMultiBuf::generate_commands(Vector<Header, 0> & /*headers*/,
        * the indirection manually inside the shader. */
       group.base_index = -1;
     }
+    const GPUPrimType draw_primitive_type = group.desc.expand_prim_type != GPU_PRIM_NONE ?
+                                                GPUPrimType(group.desc.expand_prim_type) :
+                                                batch->prim_type;
+    uint triangle_count = 0;
+    group.triangle_count_valid = draw_command_triangle_count_per_instance(
+                                     draw_primitive_type, uint(group.vertex_len), triangle_count) ?
+                                     1u :
+                                     0u;
+    group.triangle_count_per_instance = triangle_count;
 
     /* Reset counters to 0 for the GPU. */
     group.total_counter = group.front_facing_counter = group.back_facing_counter = 0;
@@ -878,8 +930,22 @@ void DrawMultiBuf::generate_commands(Vector<Header, 0> & /*headers*/,
     GPU_shader_uniform_1i(shader, "view_len", view_len);
     GPU_shader_uniform_1i(shader, "view_shift", log2_ceil_u(view_len));
     GPU_shader_uniform_1b(shader, "use_custom_ids", use_custom_ids);
+    const DRWGameViewWorkContext view_work = DRW_game_view_work_context_get();
+    const bool view_work_enabled = view_work.enabled && view_len == int(view_work.view_count);
+    if (view_work.enabled && !view_work_enabled) {
+      DRW_game_view_work_add_direct_triangles(0, false);
+    }
+    GPU_shader_uniform_1b(shader, "view_work_enabled", view_work_enabled);
+    GPU_shader_uniform_1i(shader, "view_work_base", int(view_work.result_base));
     GPU_storagebuf_bind(group_buf_, GPU_shader_get_ssbo_binding(shader, "group_buf"));
     GPU_storagebuf_bind(visibility_buf, GPU_shader_get_ssbo_binding(shader, "visibility_buf"));
+    gpu::StorageBuf *view_work_buf = DRW_game_view_work_buffer_get();
+    if (view_work_buf != nullptr) {
+      GPU_storagebuf_bind(view_work_buf, GPU_shader_get_ssbo_binding(shader, "view_work_buf"));
+    }
+    else {
+      GPU_storagebuf_bind(group_buf_, GPU_shader_get_ssbo_binding(shader, "view_work_buf"));
+    }
     GPU_storagebuf_bind(prototype_buf_, GPU_shader_get_ssbo_binding(shader, "prototype_buf"));
     GPU_storagebuf_bind(command_buf_, GPU_shader_get_ssbo_binding(shader, "command_buf"));
     GPU_storagebuf_bind(resource_id_buf_, DRW_RESOURCE_ID_SLOT);

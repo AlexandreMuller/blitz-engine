@@ -1499,7 +1499,11 @@ void ShadowModule::render(View &view, int2 extent)
                                      largest_viewport.w);
       }
 
-      inst_.pipelines.shadow.render(shadow_multi_view_);
+      {
+        DRWGameViewWorkScope view_work_scope(DRWGameViewWorkPhase::Shadow,
+                                             uint32_t(shadow_multi_view_.view_len()));
+        inst_.pipelines.shadow.render(shadow_multi_view_);
+      }
 
       if (use_flush) {
         GPU_flush();
