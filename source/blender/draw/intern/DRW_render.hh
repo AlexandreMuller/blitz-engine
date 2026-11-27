@@ -27,6 +27,10 @@
 
 #include "draw_meshlet.hh"
 
+namespace blender::gpu {
+class StorageBuf;
+}
+
 namespace blender {
 
 namespace gpu {
@@ -627,12 +631,51 @@ struct DRWGameWorkCounters {
     uint64_t mesh_triangles = 0;
   };
   std::vector<LodLevelStats> lod_levels;
+  uint64_t view_work_dropped = 0;
+  struct ViewWorkResult {
+    uint64_t source_frame = 0;
+    uint32_t invocation = 0;
+    uint32_t view_index = 0;
+    uint32_t view_capacity = 0;
+    uint64_t triangles_submitted = 0;
+    bool valid = false;
+    bool shadow = false;
+  };
+  std::vector<ViewWorkResult> view_work_results;
 
   void reset_frame();
   void add_lod_level(unsigned int level, uint64_t mesh_triangles);
 };
 
 DRWGameWorkCounters &DRW_game_work_counters_get();
+
+enum class DRWGameViewWorkPhase : uint8_t {
+  Camera,
+  Shadow,
+};
+
+struct DRWGameViewWorkContext {
+  uint32_t result_base = 0;
+  uint32_t view_count = 0;
+  bool enabled = false;
+};
+
+class DRWGameViewWorkScope {
+  bool pushed_ = false;
+
+ public:
+  DRWGameViewWorkScope(DRWGameViewWorkPhase phase,
+                       uint32_t view_count,
+                       uint32_t logical_view_index_base = 0);
+  ~DRWGameViewWorkScope();
+
+  DRWGameViewWorkScope(const DRWGameViewWorkScope &) = delete;
+  DRWGameViewWorkScope &operator=(const DRWGameViewWorkScope &) = delete;
+};
+
+DRWGameViewWorkContext DRW_game_view_work_context_get();
+gpu::StorageBuf *DRW_game_view_work_buffer_get();
+void DRW_game_view_work_add_direct_triangles(uint64_t triangles, bool valid);
 
 /* RAII scoped timer: accumulates seconds into `dest` on scope exit.
  * When `enabled` is false, timings are written to a throwaway slot (near-zero cost). */
