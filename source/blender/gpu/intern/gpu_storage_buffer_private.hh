@@ -58,8 +58,8 @@ class StorageBuf {
    * Each call does two things:
    * 1. If a previous readback request is pending and complete, copies the result into `data`
    *    and returns `true`.
-   * 2. Submits a new async copy from the device SSBO to a persistent-mapped readback buffer
-   *    for the *next* call to pick up.
+   * 2. Unless \a request_next is false after consuming a result, submits a new async copy from
+   *    the device SSBO to a persistent-mapped readback buffer for the *next* call to pick up.
    *
    * On the very first call (no previous request), returns `false` and `data` is untouched.
    * This means the data is always 1 frame behind, which is acceptable for bounding boxes.
@@ -70,7 +70,7 @@ class StorageBuf {
    * The default implementation falls back to the synchronous `async_flush_to_host()` + `read()`
    * path (returns `true` always, blocking).
    */
-  virtual bool read_if_ready(void *data); //upbge
+  virtual bool read_if_ready(void *data, bool request_next = true);  // upbge
   /** Return a CPU pointer to the buffer memory when available (Vulkan-only zero-copy). */
   virtual void *mapped_ptr_get() const
   {

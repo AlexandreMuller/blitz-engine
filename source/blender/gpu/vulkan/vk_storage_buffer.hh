@@ -55,7 +55,7 @@ class VKStorageBuffer : public StorageBuf {
   void async_flush_to_host() override;
   void sync_as_indirect_buffer() override { /* No-Op. */ };
 
-  bool read_if_ready(void *data) override;  // upbge
+  bool read_if_ready(void *data, bool request_next = true) override;  // upbge
   void *mapped_ptr_get() const override; // upbge
 
   VkBuffer vk_handle() const
