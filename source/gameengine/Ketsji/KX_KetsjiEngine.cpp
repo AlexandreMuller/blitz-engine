@@ -1047,10 +1047,16 @@ void KX_KetsjiEngine::UpdateAnimations(KX_Scene *scene)
   // Handle the animations independently of the logic time step
   if (m_flags & RESTRICT_ANIMATION) {
     double anim_timestep = 1.0 / scene->GetAnimationFPS();
-    if (m_frameTime - m_previousAnimTime > anim_timestep || m_frameTime == m_previousAnimTime) {
+    // Fixed physics steps can accumulate a small rounding error at the animation boundary.
+    constexpr double ANIMATION_TIME_TOLERANCE = 1.0e-6;
+    const double elapsed_anim_time = m_frameTime - m_previousAnimTime;
+    if (elapsed_anim_time + ANIMATION_TIME_TOLERANCE >= anim_timestep ||
+        elapsed_anim_time == 0.0) {
       // Sanity/debug print to make sure we're actually going at the fps we want (should be close
       // to anim_timestep) CM_Debug("Anim fps: " << 1.0/(m_frameTime - m_previousAnimTime));
-      m_previousAnimTime = m_frameTime;
+      if (elapsed_anim_time > 0.0) {
+        m_previousAnimTime += anim_timestep;
+      }
       for (KX_Scene *scene : m_scenes) {
         scene->UpdateAnimations(m_frameTime);
       }
