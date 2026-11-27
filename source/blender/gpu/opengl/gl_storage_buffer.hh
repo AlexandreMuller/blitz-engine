@@ -45,7 +45,7 @@ class GLStorageBuf : public StorageBuf {
   void clear(uint32_t clear_value) override;
   void copy_sub(VertBuf *src, uint dst_offset, uint src_offset, uint copy_size) override;
   void read(void *data) override;
-  bool read_if_ready(void *data) override; //upbge
+  bool read_if_ready(void *data, bool request_next = true) override; //upbge
   void async_flush_to_host() override;
   void sync_as_indirect_buffer() override;
 

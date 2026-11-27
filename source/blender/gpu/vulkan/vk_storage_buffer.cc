@@ -185,7 +185,7 @@ void VKStorageBuffer::read(void *data)
 }
 
 // upbge
-bool VKStorageBuffer::read_if_ready(void *data)
+bool VKStorageBuffer::read_if_ready(void *data, const bool request_next)
 {
   VKContext &context = *VKContext::get();
   /* If the backing buffer is host-visible and persistently mapped we can avoid the
@@ -215,7 +215,7 @@ bool VKStorageBuffer::read_if_ready(void *data)
     /* Only submit new work when the previous one was consumed (or none pending).
      * Otherwise the pending submission still owns the mapped buffer and a second
      * copy would race with it. */
-    if (ready || read_if_ready_timeline_ == 0) {
+    if (request_next || (!has_result && read_if_ready_timeline_ == 0)) {
       /* Ensure rendering is flushed so the next frame's data will be available. */
       context.rendering_end();
       read_if_ready_timeline_ = context.flush_render_graph(RenderGraphFlushFlags::SUBMIT |
@@ -258,7 +258,7 @@ bool VKStorageBuffer::read_if_ready(void *data)
   /* Step 2: Submit a new async copy for the next call to pick up, but only once the
    * previous submission was consumed — the staging buffer is owned by the pending copy
    * until then, and a second copy would race with it. */
-  if (ready || read_if_ready_timeline_ == 0) {
+  if (request_next || (!has_result && read_if_ready_timeline_ == 0)) {
     read_if_ready_buffer_->copy_from_device(context);
 
     /* Flush the render graph to actually submit the copy command, but do NOT wait. */

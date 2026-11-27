@@ -258,7 +258,7 @@ void GLStorageBuf::read(void *data)
 }
 
 // upbge
-bool GLStorageBuf::read_if_ready(void *data)
+bool GLStorageBuf::read_if_ready(void *data, const bool request_next)
 {
   if (data == nullptr) {
     return false;
@@ -282,6 +282,7 @@ bool GLStorageBuf::read_if_ready(void *data)
   }
 
   bool has_result = false;
+  const bool needs_initial_copy = read_fence_ == nullptr;
 
   /* Step 1: If a fence from a PREVIOUS call is pending, check if it's done.
    * By now (next frame) it should be signaled — zero or near-zero wait. */
@@ -300,6 +301,10 @@ bool GLStorageBuf::read_if_ready(void *data)
        * The fence stays alive; we'll check again next frame. */
       return false;
     }
+  }
+
+  if (!request_next && !needs_initial_copy) {
+    return has_result;
   }
 
   /* Step 2: Submit a NEW async copy for the next call to pick up. */
