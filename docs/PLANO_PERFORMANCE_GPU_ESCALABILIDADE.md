@@ -34,7 +34,7 @@ gargalo.
 | 3 — 6.3 controles | PARCIAL | Knobs implementados; validação de qualidade das variantes continua aberta. |
 | 4A — sombras/B2 | NÃO INICIADA | Primeiro concluir o gate interativo de B2 e perfilar cenário móvel de sombras. |
 | 4B — raytrace/denoisers | PARCIAL | Experimentos de qualidade opt-in; falta sequência visual aprovada para adotar. |
-| 4C — geometria/LOD/instancing | EM ANDAMENTO | Correlação e matriz 3× still/translate concluídas; instrumentação objetos→protótipos→grupos→draws iniciada; validação por cena, visual e contagem por view pendentes. |
+| 4C — geometria/LOD/instancing | EM ANDAMENTO | 4C.1/4C.2 concluídas; revisão visual interna sem popping evidente; 9 trocas 2→1 correlacionadas, com um único outlier GPU de 36,58 ms e nenhum >33 ms nas 8 repetições seguintes; falta A/B de desempenho e aceite visual final; correção de animações 60/61 FPS ainda sem validação em runtime; 4C.4 em instrumentação: definir semântica de triângulos por view e tratar visibilidade GPU dos indirect sem inferência. |
 | 4D — CPU Vulkan | CONDICIONAL | Iniciar apenas se trace demonstrar CPU de record alto com GPU ociosa. |
 | 5 — qualidade adaptativa | BLOQUEADA | Aguardar aceite de otimizações estáticas da Fase 4. |
 | 6 — trabalho avançado | CONDICIONAL | Occlusion/multi-draw/hLOD dependem de gargalo residual medido. |
@@ -406,15 +406,26 @@ gera níveis LOD via operador KX/Blender existente, define distâncias e histere
 avaliados e verifica materiais, atributos, bounds e flags de visibilidade de câmera/luz/sombra.
 A ferramenta não altera o arquivo de entrada: só salva quando fornecidos `--apply` e `--output`.
 Smoke validado em mesh sintética e cópia da City Street; benchmark com frames correlacionados
-confirmou níveis 0/1/2. As capturas exploratórias `f0120`/`f0420` usam poses diferentes e não
-servem para aprovar popping/qualidade; ainda é necessária comparação visual próxima ao limiar.
+confirmou níveis 0/1/2. As capturas exploratórias antigas `f0120`/`f0420` usam poses diferentes
+e não servem como comparação visual. Em 2026-11-26 foram criados pares estáticos na mesma pose
+a 23 m (LOD 0/1) e 52,25 m (LOD 1/2), além de sequências de transição nos dois sentidos para
+ambas as fronteiras; os perfis confirmam os níveis selecionados. A revisão visual interna das
+capturas pareadas e das transições não encontrou popping evidente nem perda de silhueta; o aceite
+visual final permanece aberto. Na transição 2→1, uma amostra inicial de 36,579 ms foi seguida por
+oito repetições sem novo frame GPU acima de 33 ms. Seis repetições adicionais de 60 frames
+medidos confirmaram uma troca por execução (LOD 2: 658 triângulos → LOD 1: 986) no limiar de
+47,5 m, entre os ticks 156–158; o tempo GPU correlacionado à troca ficou entre 13,337 e
+26,111 ms, com `gpu_dropped=0` e `gpu_scopes_invalid=0`. O outlier não foi recorrente, mas isso
+não atribui causalidade nem fecha as metas de p95/p99 ou de ganho sem uma comparação A/B pareada.
+Os benchmarks estáticos anteriores têm só uma amostra medida cada e não sustentam ganho de
+desempenho.
 
 | Parte 4C | Estado | Gate |
 |---|---|---|
 | 4C.1 Telemetria da seleção LOD | CONCLUÍDA | Timestamps monotônicos; smoke e matriz correlacionados cobriram níveis 0/1/2 em still/translate. |
 | 4C.2 Razões de instancing e batches | CONCLUÍDA | Fixture single/shared mesh confirmou objetos→protótipos→grupos→draws; contadores são agregados por frame, sem atribuição por view. |
-| 4C.3 Authoring e validação de LOD | PARCIAL | Ferramenta e benchmark correlacionado validados; falta comparar transições na mesma pose e aprovar visualmente. |
-| 4C.4 Triângulos de câmera e shadow views | NÃO INICIADA | Contagem confiável por view, sem inferir visibilidade de draws indiretos. |
+| 4C.3 Authoring e validação de LOD | PARCIAL | Ferramenta, pares 0/1 e 1/2 na mesma pose, revisão visual interna e transições dinâmicas registradas; 8 repetições adicionais da troca 2→1 sem hitch GPU recorrente >33 ms; falta A/B pareado para ganho/regressão, aceite visual final e validação em runtime da correção de FPS alto. |
+| 4C.4 Triângulos de câmera e shadow views | EM ANDAMENTO | Contagem por view + ring de readback assíncrono e analyzer implementados; build `bf_draw`/shaders passou. Falta runtime `BGE_GPU_PROFILE` com câmera/sombras e teste GPU draw (`WITH_GTESTS=OFF` neste build); shadow indices são locais à invocação, strips/fans e direct draws multi-view ficam inválidos. |
 
 1. **[PARCIAL] LOD discreto KX já existente:** gerar níveis offline com Decimate/Subsurf estático, configurar
    distância + histerese e preservar materiais/layouts compatíveis. Nunca executar Decimate por

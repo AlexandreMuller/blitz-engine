@@ -60,12 +60,76 @@ trajetos diferentes e **não são um A/B nem evidência de ganho**; não houve r
 Esta matriz foi coletada antes da instrumentação adicional de 4C.2; não compare seus tempos
 diretamente com os smokes posteriores de contadores.
 
-**Qualidade visual ainda pendente:** capturas exploratórias em
-`areatest_tmp/perf_gpu/out/phase4c_lod_visual/` mostram posições distintas da câmera e não
-isolam a mudança de geometria. Fazer pares de imagens perto do limiar na mesma trajetória e
-aprovar popping/hitches antes de adotar LOD. A instrumentação objetos→protótipos→grupos→draws
-está concluída para contagem global e smoke estrutural; contagens por câmera/shadow view seguem
-pendentes no gate 4C.4.
+**Validação visual 4C.3 [PARCIAL]:** em
+`areatest_tmp/perf_gpu/out/phase4c_lod_visual_same_pose/`, os pares mantêm posição e orientação
+final da câmera iguais; o estado inicial foi precondicionado para exercitar a histerese e manter
+níveis distintos. O histórico temporal entre execuções pode variar:
+
+| Comparação | Distância final | LOD confirmado no perfil |
+|---|---:|---|
+| [LOD 0](../areatest_tmp/perf_gpu/out/phase4c_lod_visual_same_pose/lod01_level0_f0120.png) × [LOD 1](../areatest_tmp/perf_gpu/out/phase4c_lod_visual_same_pose/lod01_level1_f0120.png) | 23,00 m | 1.316 × 986 triângulos |
+| [LOD 1](../areatest_tmp/perf_gpu/out/phase4c_lod_visual_same_pose/lod12_level1_f0120.png) × [LOD 2](../areatest_tmp/perf_gpu/out/phase4c_lod_visual_same_pose/lod12_level2_f0120.png) | 52,25 m | 986 × 658 triângulos |
+
+As sequências em `areatest_tmp/perf_gpu/out/phase4c_lod_transition_validated/` confirmam
+transições nos dois sentidos: 1→0 a 22,5 m, 0→1 a 27,5 m, 2→1 a 47,5 m e 1→2 a 52,5 m.
+Todos esses perfis terminaram com `gpu_dropped=0` e `gpu_scopes_invalid=0`. Na passagem 2→1,
+uma execução registrou `gpu_total_ms=36,58`; duas repetições da mesma trajetória registraram
+15,13 e 15,55 ms no frame de troca. O evento alto não foi recorrente nesta amostra, mas não
+permite atribuir causalidade nem fechar o gate de ausência de hitch.
+
+**Revisão visual 4C.3:** os pares na mesma pose e as capturas antes/depois das quatro transições
+foram revisados; não há popping evidente nem perda de silhueta nas imagens. Isso é uma revisão
+interna, não um aceite visual final. As capturas estáticas pareadas têm apenas uma amostra medida
+cada e nenhum total GPU correlacionado, então não servem como A/B de desempenho.
+
+**Repetição temporal 2→1 [SEM RECORRÊNCIA OBSERVADA]:** a primeira sequência registrou um frame
+GPU de 36,579 ms na troca; duas repetições anteriores mediram 15,132 e 15,546 ms. Após rebuild
+do alvo `blenderplayer` Release x64, foram feitas seis execuções adicionais, cada uma com
+153 ticks de warm-up e 60 medidos, cruzando o limiar de 47,5 m. Em cada execução a telemetria
+registrou exatamente uma troca de LOD 2 (658 triângulos) para LOD 1 (986), nos ticks 156–158.
+Os tempos GPU da troca foram 15,742; 23,284; 13,337; 17,959; 16,413 e 26,111 ms. Nenhuma das
+oito repetições posteriores ao outlier excedeu 33 ms; todos os perfis recentes terminaram com
+`gpu_dropped=0` e `gpu_scopes_invalid=0`. A ocorrência inicial permanece isolada e sem causa
+atribuída. Os dados não fecham p95/p99 nem demonstram ganho relativo ao baseline.
+Artefatos: `areatest_tmp/perf_gpu/out/phase4c_lod_transition_repeat60/`.
+
+**Status 4C.3:** a ferramenta, a revisão visual interna e a repetibilidade das transições estão
+registradas; a fase permanece parcial até existir A/B pareado que meça ganho/regressão, aceite
+visual final e validação em runtime do problema de FPS alto. Não adotar LOD nem declarar ganho
+com as capturas atuais. A instrumentação objetos→protótipos→grupos→draws está concluída para
+contagem global; a instrumentação por câmera/shadow view foi implementada, mas aguarda validação
+em runtime no gate 4C.4.
+
+**Instrumentação 4C.4 [EM ANDAMENTO; build validado, runtime pendente]:** a métrica é triângulos
+submetidos após o culling de cada view, não primitivas rasterizadas. `DrawGroup` agora carrega a
+topologia resolvida e a quantidade de triângulos por instância. O shader de command generation
+acumula a geometria dos protótipos visíveis para cada bit da view e um ring de cinco SSBOs publica
+os resultados com `read_if_ready()`, sem bloquear o frame. O JSONL `view_work` associa cada amostra
+a `source_frame`, fase (`camera`/`shadow`), invocação, índice lógico e capacidade; o analyzer agora
+resume amostras válidas/inválidas e scopes descartados.
+
+O caminho de câmera é escopado por `ShadingView`; vistas panorâmicas mantêm o índice da face. O
+escopo de sombra cobre a invocação multi-view, com índices locais (não há identidade estável de
+luz/tilemap). Triângulos/listas e adjacency têm contagem definida; pontos/linhas contribuem zero.
+Strips/fans são marcados inválidos porque o comprimento não resolve reinícios de primitiva. Draws
+diretos multi-view também invalidam a atribuição por view em vez de copiar uma contagem agregada.
+O build `bf_gpu` + `bf_draw` + `bf_draw_shaders` Release passou. O teste ad hoc do analyzer cobriu
+registros válidos/inválidos, frames correlacionados e drops. Os testes GPU de draw/readback não
+foram executados porque esta configuração tem `WITH_GTESTS=OFF`; falta executar com
+`BGE_GPU_PROFILE` em uma cena com câmera e sombras e confirmar `valid=1`, ausência de drops e
+associação correta de `source_frame`. Até esse runtime, os resultados permanecem experimentais e
+a 4C.4 não está concluída.
+
+**Diagnóstico adicional — transformações com FPS de cena acima de 60 [CORREÇÃO COMPILADA; runtime pendente]:**
+o caminho `RESTRICT_ANIMATION` comparava o tempo decorrido com `1/FPS` usando `>` e descartava
+o resto do intervalo após cada atualização. Com passos físicos fixos de 1/120 s, a simulação do
+agendamento reproduziu uma cadência irregular: 425/600 atualizações a 60 FPS e 580/600 a 61 FPS.
+O código agora aceita a fronteira com tolerância numérica e preserva a fase; o mesmo modelo resulta
+em 600/600 e 599/600, respectivamente. O alvo `blender` Release x64 compilou. Isto ainda não prova
+que esse caminho causa o sintoma reportado: ele só se aplica com animações limitadas ao FPS, a
+classe de objeto afetada é desconhecida e a opção correspondente não foi localizada pelo usuário.
+Validar no jogo antes de fechar a aprovação visual; nenhum nível/distância LOD foi alterado.
+
 
 **Instrumentação 4C.2 [CONCLUÍDA]:** `BGE_GPU_PROFILE` agora inclui `scene_counts` (objetos KX,
 objetos iterados/populados, passes de câmera e samples), `work.draw_prototypes` (registros
